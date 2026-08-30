@@ -1,0 +1,32 @@
+"area:gateway":
+  - changed-files:
+      - any-glob-to-any-file: "src/guardrail_gateway/**"
+"area:tests":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "tests/**"
+          - "playwright.config.ts"
+"area:documentation":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+"area:ci-cd":
+  - changed-files:
+      - any-glob-to-any-file: ".github/**"
+"area:container":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Dockerfile"
+          - ".dockerignore"
+"dependencies":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "pyproject.toml"
+          - "package.json"
+          - "package-lock.json"
+"security":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/guardrail_gateway/detectors.py"
+          - "src/guardrail_gateway/policy.py"
+          - "src/guardrail_gateway/approvals.py"
