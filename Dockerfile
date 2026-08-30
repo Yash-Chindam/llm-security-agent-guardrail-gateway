@@ -20,10 +20,17 @@ RUN apk upgrade --no-cache \
     && adduser -S -D -H -u 10001 -G gateway gateway
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
-RUN rm -rf /opt/venv/lib/python3.13/site-packages/pip* \
-    /opt/venv/bin/pip* \
-    /usr/local/lib/python3.13/site-packages/pip* \
-    /usr/local/bin/pip*
+# Version-agnostic removal. A hard-coded pythonX.Y path silently stops matching
+# when the base image minor version is bumped, which leaves pip and its vendored
+# packages (and their CVEs) in the runtime image. The final check fails the build
+# if anything survives, so a future base bump cannot regress this silently.
+RUN find /opt/venv /usr/local -depth \
+        \( -name 'pip' -o -name 'pip-*' \
+        -o -name 'setuptools' -o -name 'setuptools-*' \
+        -o -name 'wheel' -o -name 'wheel-*' \) \
+        -exec rm -rf {} + \
+    && ! python -c 'import pip' 2>/dev/null \
+    && ! python -c 'import setuptools' 2>/dev/null
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
