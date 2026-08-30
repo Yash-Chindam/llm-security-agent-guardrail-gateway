@@ -92,7 +92,7 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: bandit -c pyproject.toml -r src
       - run: pip-audit
-      - uses: aquasecurity/trivy-action@0.32.0
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -113,7 +113,7 @@ jobs:
           tags: guardrail-gateway:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - uses: aquasecurity/trivy-action@0.32.0
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: guardrail-gateway:test
           severity: HIGH,CRITICAL
