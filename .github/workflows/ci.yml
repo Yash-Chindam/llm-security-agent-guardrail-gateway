@@ -120,22 +120,8 @@ jobs:
           exit-code: "1"
 
   release-bundle:
-    name: release-bundle
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [unit, integration, coverage, e2e, security, container]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: false
-          outputs: type=oci,dest=${{ runner.temp }}/guardrail-gateway.tar
-          provenance: mode=max
-          sbom: true
-      - uses: actions/upload-artifact@v7
-        with:
-          name: guardrail-gateway-oci-${{ github.sha }}
-          path: ${{ runner.temp }}/guardrail-gateway.tar
-          retention-days: 30
+    uses: ./.github/workflows/release-bundle.yml
+    with:
+      ref: ${{ github.sha }}

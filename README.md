@@ -57,8 +57,10 @@ names rather than a `pythonX.Y` path, and the build fails if pip or
 setuptools remains importable, so a Dependabot base image bump cannot
 silently reintroduce them. On pull requests, CI builds and
 scans the image for high/critical vulnerabilities. After `main` passes every
-gate, the workflow creates a private OCI image artifact with provenance and SBOM
-metadata for controlled deployment.
+gate, a reusable workflow creates a private OCI image artifact with provenance
+and SBOM metadata for controlled deployment. Because a merge pushed with
+`GITHUB_TOKEN` emits no push event, the automerge job calls that same reusable
+workflow directly for the merge commit it creates.
 
 ## Repository automation
 
