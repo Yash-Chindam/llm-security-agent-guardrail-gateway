@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.13-alpine AS builder
+FROM python:3.14-alpine AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
@@ -10,7 +10,7 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --upgrade pip && pip install .
 
-FROM python:3.13-alpine AS runtime
+FROM python:3.14-alpine AS runtime
 
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
