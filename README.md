@@ -56,3 +56,17 @@ does not contain pip or other build tooling. On pull requests, CI builds and
 scans the image for high/critical vulnerabilities. After `main` passes every
 gate, the workflow creates a private OCI image artifact with provenance and SBOM
 metadata for controlled deployment.
+
+## Repository automation
+
+- The PR labeler maps changed paths to gateway, tests, documentation, CI/CD,
+  container, dependency, and security labels.
+- Dependabot opens grouped weekly PRs for Python, npm, GitHub Actions, and Docker.
+- Patch/minor Dependabot updates receive the `automerge` label; major updates
+  always require manual review.
+- A label-gated merge workflow waits for the complete `CI` workflow, verifies
+  that the successful run tested the PR's current head SHA, and preserves the
+  PR's individual commits with a merge commit.
+
+Apply `automerge` manually to other PRs only when they are ready to merge after
+all CI gates succeed.
