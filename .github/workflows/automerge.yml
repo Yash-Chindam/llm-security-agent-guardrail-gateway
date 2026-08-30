@@ -1,0 +1,20 @@
+name: Label-gated automerge
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-automerge:
+    if: github.event.label.name == 'automerge'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable squash merge after required checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
