@@ -52,7 +52,10 @@ docker run --rm -p 8000:8000 guardrail-gateway:local
 ```
 
 The production image uses an upgraded Alpine base, runs as UID/GID 10001, and
-does not contain pip or other build tooling. On pull requests, CI builds and
+does not contain pip or other build tooling. That removal matches package
+names rather than a `pythonX.Y` path, and the build fails if pip or
+setuptools remains importable, so a Dependabot base image bump cannot
+silently reintroduce them. On pull requests, CI builds and
 scans the image for high/critical vulnerabilities. After `main` passes every
 gate, the workflow creates a private OCI image artifact with provenance and SBOM
 metadata for controlled deployment.
