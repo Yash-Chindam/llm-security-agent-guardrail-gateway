@@ -11,6 +11,8 @@ permissions:
 
 jobs:
   merge:
+    outputs:
+      merge_sha: ${{ steps.merge.outputs.merge_sha }}
     if: >-
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
@@ -18,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Merge the tested PR when explicitly labeled
+        id: merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
@@ -35,3 +38,15 @@ jobs:
             exit 0
           fi
           gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --merge --delete-branch
+          merge_sha=$(gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json mergeCommit --jq .mergeCommit.oid)
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+  # A merge pushed with GITHUB_TOKEN does not emit a push event, so CI never
+  # runs on main for a bot merge. Bundle the merge commit here instead of
+  # letting the release artifact silently go missing.
+  release-bundle:
+    needs: merge
+    if: needs.merge.outputs.merge_sha != ''
+    uses: ./.github/workflows/release-bundle.yml
+    with:
+      ref: ${{ needs.merge.outputs.merge_sha }}
