@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "guardrail-gateway"
+version = "0.1.0"
+description = "Policy-aware security gateway for LLM and agent workflows"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "fastapi>=0.116,<1.0",
+  "pydantic-settings>=2.10,<3.0",
+  "uvicorn>=0.35,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "bandit[toml]>=1.8,<2.0",
+  "httpx>=0.28,<1.0",
+  "mypy>=1.17,<2.0",
+  "pip-audit>=2.9,<3.0",
+  "pytest>=9.0.3,<10.0",
+  "pytest-cov>=6.2,<8.0",
+  "ruff>=0.12,<1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/guardrail_gateway"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config --cov=guardrail_gateway --cov-report=term-missing --cov-fail-under=90"
+testpaths = ["tests"]
+markers = [
+  "unit: isolated unit tests",
+  "integration: in-process API integration tests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "S", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["guardrail_gateway"]
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B104"]
