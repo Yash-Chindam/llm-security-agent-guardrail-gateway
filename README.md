@@ -31,7 +31,28 @@ to the exact action digest, tenant, expiry, and one-time use.
 pytest tests/unit --no-cov
 pytest tests/integration --no-cov
 pytest tests
+npm ci
+npm run test:e2e
 ```
 
 The aggregate test command enforces at least 90% Python coverage. Pull requests
-also run strict Ruff, mypy, Bandit, pip-audit, and Trivy filesystem checks.
+also run strict Ruff, mypy, Bandit, pip-audit, Playwright, and Trivy checks.
+
+Run the complete local gate with:
+
+```bash
+python scripts/quality_gate.py
+```
+
+## Container delivery
+
+```bash
+docker build -t guardrail-gateway:local .
+docker run --rm -p 8000:8000 guardrail-gateway:local
+```
+
+The production image uses an upgraded Alpine base, runs as UID/GID 10001, and
+does not contain pip or other build tooling. On pull requests, CI builds and
+scans the image for high/critical vulnerabilities. After `main` passes every
+gate, the workflow creates a private OCI image artifact with provenance and SBOM
+metadata for controlled deployment.
