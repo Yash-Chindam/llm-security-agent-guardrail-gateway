@@ -54,9 +54,10 @@ are never written to the audit sink.
 
 Pull requests must pass linting, type checking, unit tests, integration tests,
 90% aggregate Python coverage, Playwright end-to-end tests, dependency auditing,
-and filesystem/container scanning. Applying the `automerge` label enables squash
-merge only after GitHub reports every required check as successful. Configure
-branch protection on `main` to require all jobs in the `CI` workflow.
+and filesystem/container scanning. Applying the `automerge` label enables a
+squash merge only after the `CI` workflow succeeds for the current PR head SHA.
+Where the GitHub plan supports it, also configure branch protection on `main` to
+require all jobs in the `CI` workflow.
 
 ## Roadmap
 
