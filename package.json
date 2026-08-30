@@ -1,0 +1,12 @@
+{
+  "name": "guardrail-gateway-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test:e2e": "node ./node_modules/@playwright/test/cli.js test",
+    "test:e2e:report": "node ./node_modules/@playwright/test/cli.js show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  }
+}
