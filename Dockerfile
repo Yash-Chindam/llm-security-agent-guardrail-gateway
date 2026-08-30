@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.13-slim AS builder
+FROM python:3.13-alpine AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
@@ -10,13 +10,14 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --upgrade pip && pip install .
 
-FROM python:3.13-slim AS runtime
+FROM python:3.13-alpine AS runtime
 
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
-RUN groupadd --system --gid 10001 gateway \
-    && useradd --system --uid 10001 --gid gateway --home-dir /app gateway
+RUN apk upgrade --no-cache \
+    && addgroup -S -g 10001 gateway \
+    && adduser -S -D -H -u 10001 -G gateway gateway
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 USER 10001:10001
