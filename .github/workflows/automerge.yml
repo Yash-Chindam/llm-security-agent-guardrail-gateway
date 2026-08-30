@@ -26,6 +26,12 @@ jobs:
         run: |
           current_sha=$(gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json headRefOid --jq .headRefOid)
           has_label=$(gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json labels --jq 'any(.labels[]; .name == "automerge")')
-          test "$current_sha" = "$TESTED_SHA"
-          test "$has_label" = "true"
+          if [ "$has_label" != "true" ]; then
+            echo "Skipping PR #$PR_NUMBER because it is not labeled for automerge."
+            exit 0
+          fi
+          if [ "$current_sha" != "$TESTED_SHA" ]; then
+            echo "Skipping stale CI result for PR #$PR_NUMBER."
+            exit 0
+          fi
           gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --merge --delete-branch
