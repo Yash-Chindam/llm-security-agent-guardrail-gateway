@@ -7,6 +7,7 @@ import json
 import re
 from typing import Any
 
+from guardrail_gateway.detectors import DECODED_DETECTOR
 from guardrail_gateway.models import (
     ActionInspectionRequest,
     DetectorEvidence,
@@ -43,8 +44,13 @@ def content_verdict(
     if source_tenant_id is not None and source_tenant_id != tenant_id:
         return Verdict.DENY, "cross_tenant_context"
 
+    # Obfuscated matches have no position in the original text, so redaction
+    # cannot make the content safe; the only sound verdict is denial.
+    if any(item.detector == DECODED_DETECTOR for item in evidence):
+        return Verdict.DENY, "obfuscated_content_detected"
+
     categories = {item.category for item in evidence}
-    if "prompt_injection" in categories and (
+    if categories & {"prompt_injection", "jailbreak"} and (
         point is EnforcementPoint.CONTEXT or trust_level is TrustLevel.UNTRUSTED
     ):
         return Verdict.DENY, "prompt_injection_detected"

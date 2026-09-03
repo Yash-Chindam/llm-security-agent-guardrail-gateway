@@ -40,7 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.1.0",
+        version="0.2.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service

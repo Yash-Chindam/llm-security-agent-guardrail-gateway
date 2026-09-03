@@ -44,6 +44,37 @@ Run the complete local gate with:
 python scripts/quality_gate.py
 ```
 
+## Adversarial evaluation
+
+`guardrail_gateway.redteam` is a PyRIT-style suite that targets the public
+gateway over HTTP, so a run exercises the same policy, evidence, and audit
+path as production traffic. It covers every scenario category from section 12
+of the design specification (direct and indirect injection, single- and
+multi-turn jailbreak, encoded/obfuscated instructions, sensitive-data
+extraction, cross-tenant access, tool privilege escalation, approval
+manipulation, resource exhaustion, and MCP tool poisoning) alongside a benign
+compatibility dataset, and reports the section 17 metrics: attack success
+rate, false-positive rate, side-effect prevention rate, and policy latency.
+
+Run it against a live gateway:
+
+```bash
+uvicorn guardrail_gateway.app:app &
+python -m guardrail_gateway.redteam --target http://127.0.0.1:8000
+```
+
+The run is scored against
+[`src/guardrail_gateway/redteam/baseline.json`](src/guardrail_gateway/redteam/baseline.json),
+a committed record of which attacks are blocked, which are known gaps, and
+which benign workflows must stay allowed. The gate fails (exit code 1) on any
+scenario not recorded in the baseline or on a regression — an attack that was
+previously blocked and no longer is, or a benign workflow that is now
+blocked — so weak spots stay visible instead of being silently reintroduced.
+Update the baseline deliberately after reviewing a change with
+`--refresh-baseline`. `tests/integration/test_redteam_suite.py` runs the same
+suite in-process against every pull request, so a policy regression fails CI
+before it can reach `main`.
+
 ## Container delivery
 
 ```bash
