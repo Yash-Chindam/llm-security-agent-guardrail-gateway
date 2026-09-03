@@ -1,5 +1,24 @@
-from guardrail_gateway.models import ActionInspectionRequest, SideEffect
-from guardrail_gateway.policy import action_digest, action_verdict
+from guardrail_gateway.detectors import DECODED_DETECTOR
+from guardrail_gateway.models import (
+    ActionInspectionRequest,
+    DetectorEvidence,
+    EnforcementPoint,
+    SideEffect,
+    TrustLevel,
+)
+from guardrail_gateway.policy import action_digest, action_verdict, content_verdict
+
+
+def _evidence(detector: str, category: str) -> DetectorEvidence:
+    return DetectorEvidence(
+        detector=detector,
+        version="1.1.0",
+        category=category,
+        score=0.9,
+        threshold=0.8,
+        redacted_excerpt="[MATCH]",
+        explanation="test evidence",
+    )
 
 
 def _action(**overrides: object) -> ActionInspectionRequest:
@@ -34,3 +53,36 @@ def test_denies_mutating_sql_even_if_claimed_read_only() -> None:
 
     assert verdict.value == "deny"
     assert reason == "sql_not_read_only"
+
+
+def test_denies_content_recovered_only_after_decoding_regardless_of_category() -> None:
+    evidence = [_evidence(DECODED_DETECTOR, "prompt_injection")]
+
+    verdict, reason = content_verdict(
+        EnforcementPoint.INPUT, TrustLevel.TRUSTED, None, "acme", evidence
+    )
+
+    assert verdict.value == "deny"
+    assert reason == "obfuscated_content_detected"
+
+
+def test_denies_jailbreak_content_in_an_untrusted_context() -> None:
+    evidence = [_evidence("deterministic_content", "jailbreak")]
+
+    verdict, reason = content_verdict(
+        EnforcementPoint.CONTEXT, TrustLevel.UNTRUSTED, None, "acme", evidence
+    )
+
+    assert verdict.value == "deny"
+    assert reason == "prompt_injection_detected"
+
+
+def test_allows_jailbreak_wording_in_trusted_input() -> None:
+    evidence = [_evidence("deterministic_content", "jailbreak")]
+
+    verdict, reason = content_verdict(
+        EnforcementPoint.INPUT, TrustLevel.TRUSTED, None, "acme", evidence
+    )
+
+    assert verdict.value == "allow"
+    assert reason == "policy_allow"
