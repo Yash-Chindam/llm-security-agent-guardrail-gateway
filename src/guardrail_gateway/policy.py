@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any
+from typing import Any, Protocol
 
 from guardrail_gateway.detectors import DECODED_DETECTOR
 from guardrail_gateway.models import (
@@ -116,3 +116,41 @@ def action_verdict(request: ActionInspectionRequest) -> tuple[Verdict, str]:
     if request.side_effect in _APPROVAL_EFFECTS:
         return Verdict.REQUIRE_APPROVAL, "risky_action_requires_approval"
     return Verdict.ALLOW, "action_policy_allow"
+
+
+class PolicyEngineUnavailableError(Exception):
+    """Raised by a policy decision point that cannot evaluate right now."""
+
+
+class PolicyEngine(Protocol):
+    """The policy decision point; replaceable by an OPA client."""
+
+    def content_verdict(
+        self,
+        point: EnforcementPoint,
+        trust_level: TrustLevel,
+        source_tenant_id: str | None,
+        tenant_id: str,
+        evidence: list[DetectorEvidence],
+    ) -> tuple[Verdict, str]:
+        """Return a verdict or raise PolicyEngineUnavailableError."""
+
+    def action_verdict(self, request: ActionInspectionRequest) -> tuple[Verdict, str]:
+        """Return a verdict or raise PolicyEngineUnavailableError."""
+
+
+class LocalPolicyEngine:
+    """The built-in deterministic policy, evaluated in process."""
+
+    def content_verdict(
+        self,
+        point: EnforcementPoint,
+        trust_level: TrustLevel,
+        source_tenant_id: str | None,
+        tenant_id: str,
+        evidence: list[DetectorEvidence],
+    ) -> tuple[Verdict, str]:
+        return content_verdict(point, trust_level, source_tenant_id, tenant_id, evidence)
+
+    def action_verdict(self, request: ActionInspectionRequest) -> tuple[Verdict, str]:
+        return action_verdict(request)

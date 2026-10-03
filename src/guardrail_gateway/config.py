@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     max_content_chars: int = Field(default=20_000, ge=100, le=1_000_000)
     audit_buffer_size: int = Field(default=1_000, ge=10, le=100_000)
 
+    # Section 15. When audit is mandatory, enforcement blocks once the outage
+    # buffer is full; otherwise events beyond the bound are counted and dropped.
+    audit_mandatory: bool = True
+    # When the policy decision point is unreachable, side effects always fail
+    # closed. This opts content inspection and read-only actions into the
+    # built-in local policy instead of refusing them too.
+    restricted_read_only_mode: bool = False
+
     # Signing material for caller credentials. There is deliberately no
     # "authentication disabled" switch: when this is unset the gateway cannot
     # prove who is calling, so it refuses every enforcement request instead of

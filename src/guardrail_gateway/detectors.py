@@ -6,6 +6,7 @@ import base64
 import re
 from binascii import Error as BinasciiError
 from dataclasses import dataclass
+from typing import Protocol
 
 from guardrail_gateway.models import DetectorEvidence
 
@@ -142,6 +143,24 @@ def inspect_content(content: str) -> list[DetectorEvidence]:
             _scan(decoded, DECODED_DETECTOR, " Found only after decoding embedded content.")
         )
     return evidence
+
+
+class DetectorUnavailableError(Exception):
+    """Raised by an inspector that cannot examine content right now."""
+
+
+class ContentInspector(Protocol):
+    """A source of detector evidence; replaceable by Presidio or a classifier."""
+
+    def inspect(self, content: str) -> list[DetectorEvidence]:
+        """Return evidence or raise DetectorUnavailableError."""
+
+
+class DeterministicInspector:
+    """The built-in local detector, which has no external dependency to lose."""
+
+    def inspect(self, content: str) -> list[DetectorEvidence]:
+        return inspect_content(content)
 
 
 def redact_sensitive_content(content: str) -> str:

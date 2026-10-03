@@ -59,6 +59,28 @@ verifier accepts the issuer's asymmetric keys today; discovery and key rotation
 against a live provider are tracked in
 [`docs/implementation-status.md`](docs/implementation-status.md).
 
+## Fail-safe behaviour
+
+Each security dependency is reached through a port, so losing one is a handled
+condition with a fixed outcome rather than an error that leaves a request
+half-enforced. The built-in adapters run in process; `create_app` accepts a
+`policy`, `inspectors`, and `audit_transport` to replace them.
+
+| Condition | Behaviour | Reason code |
+|---|---|---|
+| No signing material | Every enforcement request is refused; not ready. | `identity_verification_unavailable` |
+| Policy engine unreachable | Everything is denied. A side effect is denied in every mode. | `policy_engine_unavailable` |
+| Policy engine unreachable, `GUARDRAIL_RESTRICTED_READ_ONLY_MODE=true` | Content inspection and read-only actions continue under the built-in policy. | `restricted_read_only_mode` |
+| Any detector unreachable | Content is denied, even if another detector is healthy. | `content_inspection_unavailable` |
+| Detectors disagree | Evidence is unioned, so one detector's finding is never outvoted by another's silence. | the policy's own reason |
+| Audit transport down | Enforcement continues while events buffer, in order, up to `GUARDRAIL_AUDIT_BUFFER_SIZE`. | unchanged |
+| Audit buffer full, `GUARDRAIL_AUDIT_MANDATORY=true` (default) | Enforcement blocks until the transport recovers; not ready. | `audit_durability_unavailable` |
+| Audit buffer full, `GUARDRAIL_AUDIT_MANDATORY=false` | Enforcement continues; events past the bound are counted and dropped. | unchanged |
+| Approval expired | The action must be reviewed again. | `invalid_or_expired_approval` |
+| Red-team regression | The release gate fails. | n/a |
+
+`/health/ready` reports `audit` as `durable`, `buffering`, or `blocked`.
+
 ## Test layers
 
 ```bash
