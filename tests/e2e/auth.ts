@@ -54,7 +54,11 @@ export const authHeader = (options: TokenOptions): Record<string, string> => ({
   Authorization: `Bearer ${mintToken(options)}`,
 });
 
-export const CALLER = authHeader({ identity: "e2e-user", tenant: "acme" });
+export const CALLER = authHeader({
+  identity: "e2e-user",
+  tenant: "acme",
+  roles: ["caller", "operator"],
+});
 export const REVIEWER = authHeader({
   identity: "e2e-reviewer",
   tenant: "acme",

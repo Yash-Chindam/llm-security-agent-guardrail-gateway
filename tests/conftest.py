@@ -18,6 +18,7 @@ def settings() -> Settings:
         jwt_secret=TEST_SIGNING_KEY,
         jwt_issuer="https://issuer.test",
         jwt_audience="guardrail-gateway",
+        allowed_url_hosts=("api.partner.test",),
     )
 
 
@@ -29,7 +30,7 @@ def client(settings: Settings) -> Iterator[TestClient]:
 
 @pytest.fixture
 def caller_token(settings: Settings) -> str:
-    return issue_token(settings, "user-1", "acme")
+    return issue_token(settings, "user-1", "acme", roles=(Role.CALLER, Role.OPERATOR))
 
 
 @pytest.fixture
@@ -40,6 +41,14 @@ def reviewer_token(settings: Settings) -> str:
 @pytest.fixture
 def caller_auth(caller_token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {caller_token}"}
+
+
+@pytest.fixture
+def read_only_auth(settings: Settings) -> dict[str, str]:
+    """A caller that may read but holds no role permitting a side effect."""
+
+    token = issue_token(settings, "user-1", "acme", roles=(Role.CALLER,))
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture

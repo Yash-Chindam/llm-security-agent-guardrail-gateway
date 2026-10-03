@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from typing import Any, Protocol
 
+from guardrail_gateway.config import Settings
 from guardrail_gateway.detectors import DECODED_DETECTOR
+from guardrail_gateway.identity import Role
 from guardrail_gateway.models import (
     ActionInspectionRequest,
     DetectorEvidence,
@@ -16,20 +17,19 @@ from guardrail_gateway.models import (
     TrustLevel,
     Verdict,
 )
-
-_ALLOWED_TOOLS: dict[str, frozenset[SideEffect]] = {
-    "search_documents": frozenset({SideEffect.NONE, SideEffect.READ}),
-    "execute_sql": frozenset({SideEffect.READ}),
-    "send_email": frozenset({SideEffect.EXTERNAL}),
-    "update_record": frozenset({SideEffect.WRITE}),
-    "delete_record": frozenset({SideEffect.DESTRUCTIVE}),
-}
+from guardrail_gateway.tools import (
+    TOOLS,
+    ActionPolicyConfig,
+    ExecuteSqlArguments,
+    FetchUrlArguments,
+    ReadFileArguments,
+    path_violation,
+    sql_violation,
+    url_violation,
+    validate_arguments,
+)
 
 _APPROVAL_EFFECTS = {SideEffect.WRITE, SideEffect.EXTERNAL, SideEffect.DESTRUCTIVE}
-_SQL_FORBIDDEN = re.compile(
-    r"\b(insert|update|delete|drop|alter|truncate|grant|revoke|copy|call|execute)\b",
-    re.IGNORECASE,
-)
 
 
 def content_verdict(
@@ -86,32 +86,39 @@ def action_digest(request: ActionInspectionRequest) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def action_verdict(request: ActionInspectionRequest) -> tuple[Verdict, str]:
-    allowed_effects = _ALLOWED_TOOLS.get(request.tool)
-    if allowed_effects is None:
+def action_verdict(
+    request: ActionInspectionRequest,
+    roles: frozenset[Role],
+    config: ActionPolicyConfig | None = None,
+) -> tuple[Verdict, str]:
+    """Decide a proposed tool action for a caller holding the given roles."""
+
+    limits = config or ActionPolicyConfig()
+    spec = TOOLS.get(request.tool)
+    if spec is None:
         return Verdict.DENY, "tool_not_allowlisted"
-    if request.side_effect not in allowed_effects:
+    if not roles & spec.roles:
+        return Verdict.DENY, "tool_not_authorized_for_role"
+    if request.side_effect not in spec.effects:
         return Verdict.DENY, "side_effect_mismatch"
 
     expected_prefix = f"tenant:{request.tenant_id}:"
     if not request.resource.startswith(expected_prefix):
         return Verdict.DENY, "resource_tenant_mismatch"
 
-    if request.tool == "execute_sql":
-        query = request.arguments.get("query")
-        if not isinstance(query, str) or not query.strip():
-            return Verdict.DENY, "invalid_sql_arguments"
-        normalized = query.strip().rstrip(";").strip()
-        if not normalized.lower().startswith("select ") or _SQL_FORBIDDEN.search(normalized):
-            return Verdict.DENY, "sql_not_read_only"
-
-    if request.tool == "send_email":
-        if set(request.arguments) != {"to", "subject", "body"}:
-            return Verdict.DENY, "invalid_tool_arguments"
-    elif (
-        request.tool in {"update_record", "delete_record"} and "record_id" not in request.arguments
-    ):
+    arguments = validate_arguments(spec, request.arguments)
+    if arguments is None:
         return Verdict.DENY, "invalid_tool_arguments"
+
+    violation: str | None = None
+    if isinstance(arguments, ExecuteSqlArguments):
+        violation = sql_violation(arguments.query)
+    elif isinstance(arguments, ReadFileArguments):
+        violation = path_violation(arguments.path, limits)
+    elif isinstance(arguments, FetchUrlArguments):
+        violation = url_violation(arguments.url, limits)
+    if violation is not None:
+        return Verdict.DENY, violation
 
     if request.side_effect in _APPROVAL_EFFECTS:
         return Verdict.REQUIRE_APPROVAL, "risky_action_requires_approval"
@@ -135,12 +142,24 @@ class PolicyEngine(Protocol):
     ) -> tuple[Verdict, str]:
         """Return a verdict or raise PolicyEngineUnavailableError."""
 
-    def action_verdict(self, request: ActionInspectionRequest) -> tuple[Verdict, str]:
+    def action_verdict(
+        self, request: ActionInspectionRequest, roles: frozenset[Role]
+    ) -> tuple[Verdict, str]:
         """Return a verdict or raise PolicyEngineUnavailableError."""
 
 
 class LocalPolicyEngine:
     """The built-in deterministic policy, evaluated in process."""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self._config = (
+            ActionPolicyConfig(
+                allowed_url_hosts=frozenset(host.lower() for host in settings.allowed_url_hosts),
+                file_root=settings.file_root,
+            )
+            if settings is not None
+            else ActionPolicyConfig()
+        )
 
     def content_verdict(
         self,
@@ -152,5 +171,7 @@ class LocalPolicyEngine:
     ) -> tuple[Verdict, str]:
         return content_verdict(point, trust_level, source_tenant_id, tenant_id, evidence)
 
-    def action_verdict(self, request: ActionInspectionRequest) -> tuple[Verdict, str]:
-        return action_verdict(request)
+    def action_verdict(
+        self, request: ActionInspectionRequest, roles: frozenset[Role]
+    ) -> tuple[Verdict, str]:
+        return action_verdict(request, roles, self._config)

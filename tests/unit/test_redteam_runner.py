@@ -18,6 +18,7 @@ pytestmark = pytest.mark.unit
 
 CREDENTIALS = CredentialSet(
     caller="caller-token",
+    read_only="read-only-token",
     reviewer="reviewer-token",
     self_reviewer="self-reviewer-token",
     foreign_tenant="foreign-token",

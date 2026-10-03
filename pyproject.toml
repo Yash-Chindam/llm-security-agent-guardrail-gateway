@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "guardrail-gateway"
-version = "0.4.0"
+version = "0.5.0"
 description = "Policy-aware security gateway for LLM and agent workflows"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,6 +13,7 @@ dependencies = [
   "fastapi>=0.116,<1.0",
   "pydantic-settings>=2.10,<3.0",
   "pyjwt[crypto]>=2.10,<3.0",
+  "sqlglot>=27.0,<32.0",
   "uvicorn>=0.35,<1.0",
 ]
 

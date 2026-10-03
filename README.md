@@ -59,6 +59,44 @@ verifier accepts the issuer's asymmetric keys today; discovery and key rotation
 against a live provider are tracked in
 [`docs/implementation-status.md`](docs/implementation-status.md).
 
+## Action broker
+
+A protected application proposes a tool action instead of executing it. A tool
+that is not registered in
+[`tools.py`](src/guardrail_gateway/tools.py) cannot be proposed at all, and
+shell execution is deliberately absent because arbitrary code execution on the
+host is out of scope.
+
+| Tool | Side effect | Role | Argument policy |
+|---|---|---|---|
+| `search_documents` | none, read | caller | bounded query and limit |
+| `execute_sql` | read | caller | parsed; one read-only `SELECT` |
+| `read_file` | read | caller | canonical path inside the workspace root |
+| `send_email` | external | operator | one recipient, bounded fields |
+| `fetch_url` | external | operator | HTTPS to an allowlisted host |
+| `update_record` | write | operator | record identifier, flat scalar changes |
+| `delete_record` | destructive | operator | record identifier |
+
+Checks run in order: allowlist, role, side-effect class, tenant-bound resource,
+argument schema, tool-specific policy, then approval for any side effect.
+
+- **Roles.** Reading needs the `caller` role and proposing a side effect needs
+  `operator`. The `reviewer` role adjudicates and does not by itself permit
+  proposing anything.
+- **Schemas.** Arguments are validated against a strict, closed Pydantic model
+  per tool, so an undeclared field or a coerced type is refused.
+- **SQL.** Queries are parsed, not pattern-matched. A statement that changes
+  state is refused wherever it sits, including inside a common table
+  expression, and so is any function the parser does not recognise. A write
+  keyword inside a string literal or comment is not a statement and is allowed.
+- **Paths.** A path must stay under `GUARDRAIL_FILE_ROOT` after normalisation.
+  Absolute paths, drive letters, backslashes, null bytes, and percent-encoded
+  segments are refused.
+- **URLs.** Only HTTPS on the default port to a host in
+  `GUARDRAIL_ALLOWED_URL_HOSTS` (a JSON list, empty by default). Address
+  literals and embedded credentials are refused, which closes the usual routes
+  to loopback, private ranges, and cloud metadata endpoints.
+
 ## Fail-safe behaviour
 
 Each security dependency is reached through a port, so losing one is a handled

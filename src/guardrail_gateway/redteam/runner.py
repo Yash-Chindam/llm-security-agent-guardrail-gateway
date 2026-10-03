@@ -40,6 +40,7 @@ class CredentialSet(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     caller: str
+    read_only: str
     reviewer: str
     self_reviewer: str
     foreign_tenant: str
