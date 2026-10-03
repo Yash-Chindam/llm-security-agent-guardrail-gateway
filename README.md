@@ -97,6 +97,27 @@ argument schema, tool-specific policy, then approval for any side effect.
   literals and embedded credentials are refused, which closes the usual routes
   to loopback, private ranges, and cloud metadata endpoints.
 
+## Quotas and execution budgets
+
+Resource exhaustion is a named threat in the design specification: a request
+that creates loops or excessive model and tool use.
+
+| Variable | Default | Limits |
+|---|---|---|
+| `GUARDRAIL_IDENTITY_REQUESTS_PER_MINUTE` | 600 | Enforcement requests from one identity. |
+| `GUARDRAIL_TENANT_REQUESTS_PER_MINUTE` | 3000 | Enforcement requests shared by a tenant. |
+| `GUARDRAIL_MAX_ACTIONS_PER_TRACE` | 25 | Actions one `trace_id` may propose. |
+
+A request past a quota is denied with `quota_exceeded`. The identity limit is
+checked first, so one noisy caller is stopped before it spends the quota its
+tenant shares. An action past its trace's budget is denied with
+`execution_budget_exceeded`, and refused actions spend the budget exactly as
+permitted ones do, so a looping agent is stopped whatever it is proposing.
+Limiter state is bounded, so inventing identities or trace identifiers cannot
+grow the gateway's memory. The counters are per process; a shared store for
+multi-replica deployments is tracked in
+[`docs/implementation-status.md`](docs/implementation-status.md).
+
 ## Fail-safe behaviour
 
 Each security dependency is reached through a port, so losing one is a handled

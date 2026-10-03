@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # built-in local policy instead of refusing them too.
     restricted_read_only_mode: bool = False
 
+    # Sections 5, 8.1 and 8.4. Requests per minute for one identity and for a
+    # whole tenant, and how many actions a single trace may propose.
+    identity_requests_per_minute: int = Field(default=600, ge=1, le=1_000_000)
+    tenant_requests_per_minute: int = Field(default=3_000, ge=1, le=10_000_000)
+    max_actions_per_trace: int = Field(default=25, ge=1, le=10_000)
+
     # Section 11. Hosts an agent may fetch from, as a JSON list; empty permits
     # no outbound request. File tools are confined to one directory tree.
     allowed_url_hosts: tuple[str, ...] = ()
