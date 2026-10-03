@@ -34,6 +34,28 @@ class Settings(BaseSettings):
     tenant_requests_per_minute: int = Field(default=3_000, ge=1, le=10_000_000)
     max_actions_per_trace: int = Field(default=25, ge=1, le=10_000)
 
+    # Section 8.1. Models content may be sent to; empty places no restriction.
+    # Sensitive content bound for a local-only model is routed there unredacted
+    # instead of being redacted for an external one.
+    eligible_models: tuple[str, ...] = ()
+    local_only_models: tuple[str, ...] = ()
+    # Injection denials within the window that lock an identity out; 0 disables.
+    violation_lockout_threshold: int = Field(default=0, ge=0, le=10_000)
+    violation_window_seconds: int = Field(default=600, ge=1, le=86_400)
+
+    # Section 8.3. Share of a cited sentence's terms its sources must contain,
+    # phrases that count as declining to answer, and application-specific
+    # categories of terms a response may not contain.
+    grounding_min_overlap: float = Field(default=0.5, ge=0, le=1)
+    abstention_phrases: tuple[str, ...] = (
+        "i don't know",
+        "i do not know",
+        "i cannot answer",
+        "i do not have enough information",
+        "i don't have enough information",
+    )
+    disallowed_output_terms: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+
     # Section 11. Hosts an agent may fetch from, as a JSON list; empty permits
     # no outbound request. File tools are confined to one directory tree.
     allowed_url_hosts: tuple[str, ...] = ()

@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SUITE_VERSION = "2026-10-03.3"
+SUITE_VERSION = "2026-10-03.4"
 SCORER_VERSION = "1.1.0"
 
 

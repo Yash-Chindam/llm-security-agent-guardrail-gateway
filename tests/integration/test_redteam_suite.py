@@ -89,6 +89,7 @@ def test_every_specification_attack_category_is_covered(suite_run: Any) -> None:
         "resource_exhaustion",
         "mcp_poisoning",
         "identity_spoofing",
+        "output_integrity",
     }
 
     covered = {r.category for r in suite_run.results}

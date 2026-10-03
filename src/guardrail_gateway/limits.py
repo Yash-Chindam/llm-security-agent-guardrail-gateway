@@ -83,3 +83,47 @@ class ExecutionBudget:
             while len(self._spent) > self._max_keys:
                 self._spent.popitem(last=False)
             return spent < self._max_actions
+
+
+class ViolationHistory:
+    """Counts an identity's recent policy violations to lock out a repeat offender.
+
+    Section 8.1 inspects known policy violations before the model. An identity
+    that keeps sending injections is probing for a bypass, and each attempt it
+    is allowed is another sample of the detector's blind spots.
+    """
+
+    def __init__(
+        self,
+        threshold: int,
+        window_seconds: float,
+        clock: Callable[[], float] = monotonic,
+        max_keys: int = _DEFAULT_MAX_KEYS,
+    ) -> None:
+        self._threshold = threshold
+        self._window = window_seconds
+        self._clock = clock
+        self._max_keys = max_keys
+        self._events: OrderedDict[Hashable, tuple[float, int]] = OrderedDict()
+        self._lock = RLock()
+
+    def record(self, key: Hashable) -> None:
+        if self._threshold <= 0:
+            return
+        now = self._clock()
+        with self._lock:
+            started, count = self._events.get(key, (now, 0))
+            if now - started >= self._window:
+                started, count = now, 0
+            self._events[key] = (started, min(count + 1, self._threshold))
+            self._events.move_to_end(key)
+            while len(self._events) > self._max_keys:
+                self._events.popitem(last=False)
+
+    def locked(self, key: Hashable) -> bool:
+        if self._threshold <= 0:
+            return False
+        now = self._clock()
+        with self._lock:
+            started, count = self._events.get(key, (now, 0))
+            return now - started < self._window and count >= self._threshold

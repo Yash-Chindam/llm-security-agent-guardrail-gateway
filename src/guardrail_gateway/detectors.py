@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from guardrail_gateway.models import DetectorEvidence
+from guardrail_gateway.tools import TOOLS
 
 # Evidence recovered from decoded content has no location in the original text,
 # so it can never be safely redacted in place.
@@ -22,6 +23,8 @@ class MatchRule:
     score: float
     explanation: str
 
+
+_TOOL_NAMES = "|".join(sorted(TOOLS))
 
 _RULES: tuple[MatchRule, ...] = (
     MatchRule(
@@ -55,6 +58,18 @@ _RULES: tuple[MatchRule, ...] = (
         ),
         0.88,
         "Content attempts to install an unrestricted persona.",
+    ),
+    MatchRule(
+        "embedded_action",
+        re.compile(
+            r"<\s*/?\s*(?:tool_call|tool_use|function_call|function_calls|invoke)\b"
+            r'|"(?:tool|tool_name|function|name)"\s*:\s*"[A-Za-z_][\w.-]*"[^{}]{0,200}?'
+            r'"(?:arguments|parameters|args|input)"\s*:'
+            rf"|\b(?:{_TOOL_NAMES})\s*\(",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        0.9,
+        "Content carries a tool call instead of proposing it to the action broker.",
     ),
     MatchRule(
         "secret",
