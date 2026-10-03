@@ -17,10 +17,40 @@ from guardrail_gateway.redteam.models import (
     ScenarioResult,
     SuiteMetrics,
 )
-from guardrail_gateway.redteam.scenarios import ACTION_PATH, ALL_SCENARIOS, Probe, Scenario
+from guardrail_gateway.redteam.scenarios import (
+    ACTION_PATH,
+    ALL_SCENARIOS,
+    APPROVE_PATH,
+    Credential,
+    Probe,
+    Scenario,
+)
 
 # A request the gateway refuses to let continue unchanged.
 _BLOCKING_VERDICTS = frozenset({"deny", "require_approval"})
+
+
+class CredentialSet(BaseModel):
+    """Bearer credentials the suite presents, one per attacker position.
+
+    The suite authenticates like any other caller, so every scenario exercises
+    the real credential path rather than a bypass reserved for tests.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    caller: str
+    reviewer: str
+    self_reviewer: str
+    foreign_tenant: str
+    forged: str
+    expired: str
+
+    def header_for(self, credential: Credential) -> dict[str, str]:
+        if credential is Credential.ANONYMOUS:
+            return {}
+        token: str = getattr(self, credential.value)
+        return {"Authorization": f"Bearer {token}"}
 
 
 class GatewayClient(Protocol):
@@ -64,7 +94,9 @@ def _percentile(values: list[float], fraction: float) -> float:
     return round(ordered[index], 3)
 
 
-def _run_scenario(client: GatewayClient, scenario: Scenario) -> ScenarioResult:
+def _run_scenario(
+    client: GatewayClient, scenario: Scenario, credentials: CredentialSet
+) -> ScenarioResult:
     verdicts: list[str] = []
     reason_codes: list[str] = []
     approvals: dict[int, str] = {}
@@ -73,10 +105,18 @@ def _run_scenario(client: GatewayClient, scenario: Scenario) -> ScenarioResult:
     for index, probe in enumerate(scenario.probes):
         # Approve before sending, so the probe observes the reviewed state.
         if probe.approve_from is not None:
-            _approve(client, approvals.get(probe.approve_from))
+            _approve(client, approvals.get(probe.approve_from), credentials)
+
+        path = _path_for(probe, approvals)
+        if path is None:
+            # The approval this probe targets was never created, so there is
+            # nothing to attack and the attempt cannot be counted as blocked.
+            verdicts.append("allow")
+            reason_codes.append("approval_target_missing")
+            continue
 
         payload = _payload_for(probe, approvals)
-        status_code, body = client.post(probe.path, payload)
+        status_code, body = client.post(path, payload, credentials.header_for(probe.credential))
 
         if status_code >= 400:
             # A schema or transport rejection is a refusal to let the call continue.
@@ -110,6 +150,17 @@ def _run_scenario(client: GatewayClient, scenario: Scenario) -> ScenarioResult:
     )
 
 
+def _path_for(probe: Probe, approvals: dict[int, str]) -> str | None:
+    """Resolve an approval-decision probe's path, or None if there is no target."""
+
+    if probe.approve_target is None:
+        return probe.path
+    approval_id = approvals.get(probe.approve_target)
+    if approval_id is None:
+        return None
+    return APPROVE_PATH.format(approval_id=approval_id)
+
+
 def _payload_for(probe: Probe, approvals: dict[int, str]) -> dict[str, Any]:
     if probe.approval_token_from is None:
         return probe.payload
@@ -119,13 +170,13 @@ def _payload_for(probe: Probe, approvals: dict[int, str]) -> dict[str, Any]:
     return {**probe.payload, "approval_token": token}
 
 
-def _approve(client: GatewayClient, approval_id: str | None) -> None:
+def _approve(client: GatewayClient, approval_id: str | None, credentials: CredentialSet) -> None:
     if approval_id is None:
         return
     client.post(
-        f"/v1/approvals/{approval_id}/approve",
+        APPROVE_PATH.format(approval_id=approval_id),
         {"rationale": "red-team suite reviewer approval"},
-        {"X-Reviewer-Id": "reviewer@acme"},
+        credentials.header_for(Credential.REVIEWER),
     )
 
 
@@ -187,11 +238,12 @@ def run_suite(
     client: GatewayClient,
     target: str,
     policy_version: str,
+    credentials: CredentialSet,
     scenarios: tuple[Scenario, ...] = ALL_SCENARIOS,
 ) -> RedTeamRun:
     """Run every scenario and return the scored run with section 17 metrics."""
 
-    results = [_run_scenario(client, scenario) for scenario in scenarios]
+    results = [_run_scenario(client, scenario, credentials) for scenario in scenarios]
     return RedTeamRun(
         target=target,
         policy_version=policy_version,

@@ -6,6 +6,9 @@ model output, and proposed tool actions before they cross a security boundary.
 This repository implements the technical design in
 [`04-llm-security-agent-guardrail-gateway.md`](04-llm-security-agent-guardrail-gateway.md)
 as a sequence of independently tested milestones.
+[`docs/implementation-status.md`](docs/implementation-status.md) tracks each
+section of that specification against what the gateway actually enforces today,
+including what is still missing.
 
 ## Development setup
 
@@ -17,13 +20,44 @@ python -m pip install -e ".[dev]"
 ## Run the gateway
 
 ```bash
-uvicorn guardrail_gateway.app:app --reload
+GUARDRAIL_JWT_SECRET="$(openssl rand -hex 32)" uvicorn guardrail_gateway.app:app --reload
 ```
 
 The API is available at `http://127.0.0.1:8000`, with OpenAPI documentation at
 `/docs`. Enforcement endpoints cover input, retrieved context, model output, and
 proposed tool actions. Risky actions return an approval identifier that is bound
 to the exact action digest, tenant, expiry, and one-time use.
+
+## Caller identity
+
+Every enforcement endpoint requires a signed bearer credential. The principal
+comes from the token's `sub`, `tenant`, and `roles` claims, and an `identity` or
+`tenant_id` in a request body must agree with it, so a caller cannot assert a
+tenant it does not hold. Verification is offline against configured signing
+material, which keeps enforcement working while an identity provider is
+unreachable.
+
+| Variable | Purpose |
+|---|---|
+| `GUARDRAIL_JWT_SECRET` | HMAC secret or issuer public key. At least 32 bytes for HS256. |
+| `GUARDRAIL_JWT_ALGORITHM` | Pinned verification algorithm, `HS256` by default. |
+| `GUARDRAIL_JWT_ISSUER` | Required `iss` claim, when set. |
+| `GUARDRAIL_JWT_AUDIENCE` | Required `aud` claim, when set. |
+
+There is deliberately no switch to disable authentication. With no signing
+material the gateway cannot prove who is calling, so it reports itself not ready
+on `/health/ready` and refuses every enforcement request with
+`identity_verification_unavailable` rather than trusting a request body.
+
+Approving a risky action needs the `reviewer` role, and the identity that
+proposed an action can never approve it, whatever roles it holds. Approvals are
+scoped to their tenant: another tenant sees `404` rather than a refusal that
+would confirm the approval exists.
+
+Section 16 of the design specification calls for OIDC/OAuth identity. The
+verifier accepts the issuer's asymmetric keys today; discovery and key rotation
+against a live provider are tracked in
+[`docs/implementation-status.md`](docs/implementation-status.md).
 
 ## Test layers
 
@@ -56,9 +90,15 @@ manipulation, resource exhaustion, and MCP tool poisoning) alongside a benign
 compatibility dataset, and reports the section 17 metrics: attack success
 rate, false-positive rate, side-effect prevention rate, and policy latency.
 
-Run it against a live gateway:
+The suite authenticates like any other caller, so it also attacks the credential
+path itself: unauthenticated requests, forged and expired credentials, bodies
+that claim another identity or tenant, approvals attempted without the reviewer
+role, self-approval by the requester, and another tenant reaching for an
+approval. Run it against a live gateway with the signing material that gateway
+verifies:
 
 ```bash
+export GUARDRAIL_JWT_SECRET="$(openssl rand -hex 32)"
 uvicorn guardrail_gateway.app:app &
 python -m guardrail_gateway.redteam --target http://127.0.0.1:8000
 ```

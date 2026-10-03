@@ -6,8 +6,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SUITE_VERSION = "2026-08-30.1"
-SCORER_VERSION = "1.0.0"
+SUITE_VERSION = "2026-10-03.1"
+SCORER_VERSION = "1.1.0"
 
 
 class Expectation(StrEnum):
