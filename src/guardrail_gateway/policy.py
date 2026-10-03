@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from guardrail_gateway.config import Settings
@@ -13,10 +14,12 @@ from guardrail_gateway.models import (
     ActionInspectionRequest,
     DetectorEvidence,
     EnforcementPoint,
+    EntityAction,
     SideEffect,
     TrustLevel,
     Verdict,
 )
+from guardrail_gateway.sensitive import action_resolver
 from guardrail_gateway.tools import (
     TOOLS,
     ActionPolicyConfig,
@@ -38,11 +41,17 @@ def content_verdict(
     source_tenant_id: str | None,
     tenant_id: str,
     evidence: list[DetectorEvidence],
+    action_of: Callable[[str], EntityAction] | None = None,
 ) -> tuple[Verdict, str]:
     """Evaluate detector evidence in context; detectors never authorize by themselves."""
 
     if source_tenant_id is not None and source_tenant_id != tenant_id:
         return Verdict.DENY, "cross_tenant_context"
+
+    # A canary has no legitimate reason to be anywhere, so nothing below can
+    # make its appearance acceptable.
+    if any(item.category == "canary" for item in evidence):
+        return Verdict.DENY, "canary_leak_detected"
 
     # Obfuscated matches have no position in the original text, so redaction
     # cannot make the content safe; the only sound verdict is denial.
@@ -63,10 +72,20 @@ def content_verdict(
     ):
         return Verdict.DENY, "prompt_injection_detected"
 
-    sensitive = bool(categories & {"secret", "pii_email", "pii_phone"})
-    if sensitive and point is EnforcementPoint.OUTPUT:
+    resolve = action_of or (lambda _category: EntityAction.REDACT)
+    rules = {
+        category: resolve(category)
+        for category in categories
+        if category == "secret" or category.startswith("pii_")
+    }
+    governed = {action for action in rules.values() if action is not EntityAction.ALLOW}
+    if EntityAction.DENY in governed:
+        return Verdict.DENY, "sensitive_content_denied"
+    if governed and point is EnforcementPoint.OUTPUT:
         return Verdict.DENY, "sensitive_output_detected"
-    if sensitive:
+    if governed == {EntityAction.PSEUDONYMIZE}:
+        return Verdict.TRANSFORM, "sensitive_content_pseudonymized"
+    if governed:
         return Verdict.TRANSFORM, "sensitive_content_redacted"
     return Verdict.ALLOW, "policy_allow"
 
@@ -160,6 +179,7 @@ class LocalPolicyEngine:
     """The built-in deterministic policy, evaluated in process."""
 
     def __init__(self, settings: Settings | None = None) -> None:
+        self._settings = settings
         self._config = (
             ActionPolicyConfig(
                 allowed_url_hosts=frozenset(host.lower() for host in settings.allowed_url_hosts),
@@ -177,7 +197,10 @@ class LocalPolicyEngine:
         tenant_id: str,
         evidence: list[DetectorEvidence],
     ) -> tuple[Verdict, str]:
-        return content_verdict(point, trust_level, source_tenant_id, tenant_id, evidence)
+        action_of = (
+            action_resolver(self._settings, tenant_id) if self._settings is not None else None
+        )
+        return content_verdict(point, trust_level, source_tenant_id, tenant_id, evidence, action_of)
 
     def action_verdict(
         self, request: ActionInspectionRequest, roles: frozenset[Role]

@@ -6,8 +6,11 @@ from typing import Literal, Self
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from guardrail_gateway.models import EntityAction
+
 # RFC 7518 section 3.2: an HMAC key must be at least as long as the hash output.
 MINIMUM_HMAC_KEY_BYTES = 32
+MINIMUM_CANARY_CHARS = 12
 
 
 class Settings(BaseSettings):
@@ -58,6 +61,19 @@ class Settings(BaseSettings):
     )
     disallowed_output_terms: dict[str, tuple[str, ...]] = Field(default_factory=dict)
 
+    # Section 10. What is done with each sensitive category, for the deployment
+    # and per tenant; an unlisted category is redacted. Secrets are never
+    # allowed through or stored reversibly.
+    sensitive_entity_actions: dict[str, EntityAction] = Field(default_factory=dict)
+    tenant_entity_actions: dict[str, dict[str, EntityAction]] = Field(default_factory=dict)
+    pseudonym_ttl_seconds: int = Field(default=3_600, ge=1, le=604_800)
+    # Seeded values that must never appear anywhere; a sighting is a leak.
+    canary_secrets: tuple[SecretStr, ...] = ()
+    # A Presidio analyzer inside the trusted boundary, used when set.
+    presidio_url: str | None = Field(default=None, pattern=r"^https?://")
+    presidio_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
+    presidio_score_threshold: float = Field(default=0.5, ge=0, le=1)
+
     # Section 11. Hosts an agent may fetch from, as a JSON list; empty permits
     # no outbound request. File tools are confined to one directory tree.
     allowed_url_hosts: tuple[str, ...] = ()
@@ -88,6 +104,19 @@ class Settings(BaseSettings):
                 f"jwt_secret must be at least {MINIMUM_HMAC_KEY_BYTES} bytes "
                 f"for {self.jwt_algorithm}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _keep_secrets_irreversible(self) -> Self:
+        """Refuse a rule that would let a secret through or store it reversibly."""
+
+        rules = [self.sensitive_entity_actions, *self.tenant_entity_actions.values()]
+        for rule in rules:
+            if rule.get("secret") in (EntityAction.ALLOW, EntityAction.PSEUDONYMIZE):
+                raise ValueError("a secret may only be redacted or denied")
+        # A short canary would match ordinary text and report leaks that are not.
+        if any(len(c.get_secret_value()) < MINIMUM_CANARY_CHARS for c in self.canary_secrets):
+            raise ValueError(f"a canary secret must be at least {MINIMUM_CANARY_CHARS} characters")
         return self
 
 

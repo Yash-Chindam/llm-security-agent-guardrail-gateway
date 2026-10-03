@@ -17,10 +17,11 @@ from guardrail_gateway.approvals import ApprovalStore
 from guardrail_gateway.audit import AuditSink
 from guardrail_gateway.config import Settings
 from guardrail_gateway.detectors import (
+    CanaryInspector,
     ContentInspector,
     DetectorUnavailableError,
     DeterministicInspector,
-    redact_sensitive_content,
+    Finding,
 )
 from guardrail_gateway.identity import Principal
 from guardrail_gateway.limits import ExecutionBudget, RateLimiter, ViolationHistory
@@ -34,6 +35,8 @@ from guardrail_gateway.models import (
     DocumentDecision,
     EnforcementPoint,
     OutputInspectionRequest,
+    PseudonymRestoreRequest,
+    PseudonymRestoreResponse,
     SecurityDecision,
     SideEffect,
     TrustLevel,
@@ -45,6 +48,12 @@ from guardrail_gateway.policy import (
     PolicyEngine,
     PolicyEngineUnavailableError,
     action_digest,
+)
+from guardrail_gateway.sensitive import (
+    InMemoryPseudonymVault,
+    PseudonymVault,
+    action_resolver,
+    transform,
 )
 
 # Effects that change nothing outside the gateway, and so may continue under
@@ -69,12 +78,19 @@ class GatewayService:
         policy: PolicyEngine | None = None,
         inspectors: tuple[ContentInspector, ...] | None = None,
         clock: Callable[[], float] = monotonic,
+        vault: PseudonymVault | None = None,
     ) -> None:
         self.settings = settings
         self.approvals = approvals
         self.audit = audit
         self.policy: PolicyEngine = policy or LocalPolicyEngine(settings)
         self.inspectors: tuple[ContentInspector, ...] = inspectors or (DeterministicInspector(),)
+        if settings.canary_secrets:
+            canaries = tuple(value.get_secret_value() for value in settings.canary_secrets)
+            self.inspectors = (*self.inspectors, CanaryInspector(canaries))
+        self.vault: PseudonymVault = vault or InMemoryPseudonymVault(
+            settings.pseudonym_ttl_seconds, clock=clock
+        )
         self._restricted_policy = LocalPolicyEngine(settings)
         self._identity_quota = RateLimiter(settings.identity_requests_per_minute, clock=clock)
         self._tenant_quota = RateLimiter(settings.tenant_requests_per_minute, clock=clock)
@@ -133,13 +149,14 @@ class GatewayService:
         if len(request.content) > self.settings.max_content_chars:
             return decide(Verdict.DENY, "content_size_exceeded")
 
-        verdict, reason, evidence = self._judge(
+        verdict, reason, findings = self._judge(
             point,
             request.trust_level,
             request.source_tenant_id,
             request.tenant_id,
             request.content,
         )
+        evidence = [finding.evidence for finding in findings]
         if verdict is Verdict.DENY:
             return decide(verdict, reason, evidence)
 
@@ -151,7 +168,9 @@ class GatewayService:
             )
 
         transformed = (
-            redact_sensitive_content(request.content) if verdict is Verdict.TRANSFORM else None
+            self._transformed(request.content, findings, principal.tenant_id, request.trace_id)
+            if verdict is Verdict.TRANSFORM
+            else None
         )
         if verdict is Verdict.ALLOW and isinstance(request, OutputInspectionRequest):
             verdict, output_reason, transformed = output_verdict(request, self._output_policy)
@@ -215,7 +234,7 @@ class GatewayService:
         remaining = self.settings.max_context_chars
         results: list[DocumentDecision] = []
         for document in request.documents:
-            result = self._judge_document(document, principal, remaining)
+            result = self._judge_document(document, principal, remaining, request.trace_id)
             if result.reason_code in _VIOLATION_REASONS:
                 self._violations.record(offender)
             if result.content is not None:
@@ -243,7 +262,7 @@ class GatewayService:
         return conclude(Verdict.TRANSFORM, "context_filtered", results)
 
     def _judge_document(
-        self, document: ContextDocument, principal: Principal, remaining: int
+        self, document: ContextDocument, principal: Principal, remaining: int, trace_id: UUID
     ) -> DocumentDecision:
         def refuse(reason: str, evidence: list[DetectorEvidence] | None = None) -> DocumentDecision:
             return DocumentDecision(
@@ -262,18 +281,19 @@ class GatewayService:
         if len(document.content) > remaining:
             return refuse("context_budget_exceeded")
 
-        verdict, reason, evidence = self._judge(
+        verdict, reason, findings = self._judge(
             EnforcementPoint.CONTEXT,
             document.trust_level,
             document.source_tenant_id,
             principal.tenant_id,
             document.content,
         )
+        evidence = [finding.evidence for finding in findings]
         if verdict is Verdict.DENY:
             return refuse(reason, evidence)
 
         content = (
-            redact_sensitive_content(document.content)
+            self._transformed(document.content, findings, principal.tenant_id, trace_id)
             if verdict is Verdict.TRANSFORM
             else document.content
         )
@@ -292,14 +312,15 @@ class GatewayService:
         source_tenant_id: str | None,
         tenant_id: str,
         content: str,
-    ) -> tuple[Verdict, str, list[DetectorEvidence]]:
+    ) -> tuple[Verdict, str, list[Finding]]:
         """Inspect content and decide it, applying section 15 to each dependency."""
 
         try:
-            evidence = self._evidence(content)
+            findings = self._findings(content)
         except DetectorUnavailableError:
             # Uninspected content may carry anything, so it does not continue.
             return Verdict.DENY, "content_inspection_unavailable", []
+        evidence = [finding.evidence for finding in findings]
 
         try:
             verdict, reason = self.policy.content_verdict(
@@ -307,13 +328,13 @@ class GatewayService:
             )
         except PolicyEngineUnavailableError:
             if not self.settings.restricted_read_only_mode:
-                return Verdict.DENY, "policy_engine_unavailable", evidence
+                return Verdict.DENY, "policy_engine_unavailable", findings
             verdict, reason = self._restricted_policy.content_verdict(
                 point, trust_level, source_tenant_id, tenant_id, evidence
             )
             if verdict is Verdict.ALLOW:
                 reason = "restricted_read_only_mode"
-        return verdict, reason, evidence
+        return verdict, reason, findings
 
     def inspect_action(
         self, request: ActionInspectionRequest, principal: Principal
@@ -401,18 +422,52 @@ class GatewayService:
             return False
         return self._tenant_quota.allow(principal.tenant_id)
 
-    def _evidence(self, content: str) -> list[DetectorEvidence]:
-        """Union every inspector's evidence.
+    def _findings(self, content: str) -> list[Finding]:
+        """Union every inspector's findings.
 
         When detectors disagree, the union is the conservative reading section
         15 asks for: one detector's finding is never outvoted by another's
         silence, and policy then weighs it against the enforcement point.
         """
 
-        evidence: list[DetectorEvidence] = []
+        findings: list[Finding] = []
         for inspector in self.inspectors:
-            evidence.extend(inspector.inspect(content))
-        return evidence
+            findings.extend(inspector.inspect(content))
+        return findings
+
+    def _transformed(
+        self, content: str, findings: list[Finding], tenant_id: str, trace_id: UUID
+    ) -> str:
+        """Apply the tenant's rule to each sensitive value that was located."""
+
+        scope = (tenant_id, trace_id)
+        return transform(
+            content,
+            findings,
+            action_resolver(self.settings, tenant_id),
+            lambda category, value: self.vault.tokenize(scope, category, value),
+        )
+
+    def restore_pseudonyms(
+        self, request: PseudonymRestoreRequest, principal: Principal
+    ) -> PseudonymRestoreResponse | None:
+        """Turn a trace's pseudonyms back into values, for the tenant that owns them.
+
+        Returns None when the body claims an identity the credential does not
+        prove. The scope is the caller's proven tenant, so one tenant can never
+        resolve another's pseudonyms even with the trace identifier in hand.
+        """
+
+        if _asserts_another_identity(request.identity, request.tenant_id, principal):
+            self.audit.publish_rejection("identity_assertion_mismatch", "/v1/pseudonyms/restore")
+            return None
+        content, restored = self.vault.restore(
+            (principal.tenant_id, request.trace_id), request.content
+        )
+        self.audit.publish_operation(
+            "pseudonyms_restored", principal.tenant_id, str(request.trace_id), restored
+        )
+        return PseudonymRestoreResponse(content=content, restored=restored)
 
     def _publish(self, decision: SecurityDecision) -> SecurityDecision:
         self.audit.publish(decision)

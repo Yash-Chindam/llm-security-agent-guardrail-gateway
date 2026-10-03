@@ -124,6 +124,27 @@ class AuditSink:
             }
         )
 
+    def publish_operation(
+        self, reason_code: str, tenant_id: str, trace_id: str, count: int
+    ) -> None:
+        """Record an operation that is not an enforcement decision.
+
+        Re-identifying pseudonymized data is exactly the kind of access an
+        auditor needs to see, so it is recorded with who and how much, and
+        never with the values themselves.
+        """
+
+        self._deliver(
+            {
+                "enforcement_point": "operation",
+                "verdict": "allow",
+                "reason_code": reason_code,
+                "tenant_id": tenant_id,
+                "trace_id": trace_id,
+                "count": count,
+            }
+        )
+
     def _deliver(self, event: dict[str, Any]) -> None:
         with self._lock:
             self._flush()

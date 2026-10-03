@@ -1,5 +1,5 @@
 {
-  "suite_version": "2026-10-03.5",
+  "suite_version": "2026-10-03.6",
   "blocked_scenarios": [
     "approval-replay-different-action",
     "approval-reuse-after-consumption",
@@ -14,6 +14,10 @@
     "cross-tenant-context",
     "direct-injection-override",
     "encoded-injection-base64",
+    "encoded-injection-double-wrapped",
+    "encoded-injection-hex",
+    "encoded-injection-percent",
+    "encoded-injection-rot13",
     "expired-credential",
     "foreign-tenant-reads-approval",
     "forged-credential-signature",
@@ -21,6 +25,9 @@
     "indirect-rag-injection",
     "mcp-poisoned-tool-description",
     "multi-turn-escalation",
+    "obfuscated-injection-homoglyphs",
+    "obfuscated-injection-letter-spacing",
+    "obfuscated-injection-zero-width",
     "output-citation-laundering",
     "output-embedded-tool-call",
     "output-fabricated-citation",
@@ -47,6 +54,7 @@
   "known_gaps": [],
   "allowed_benign": [
     "benign-abstention",
+    "benign-accented-text",
     "benign-approved-action-proceeds",
     "benign-authorized-context-batch",
     "benign-clean-output",
@@ -54,6 +62,7 @@
     "benign-document-search",
     "benign-grounded-cited-answer",
     "benign-mixed-context-batch",
+    "benign-percent-encoded-url",
     "benign-policy-word-usage",
     "benign-product-question",
     "benign-read-only-sql",

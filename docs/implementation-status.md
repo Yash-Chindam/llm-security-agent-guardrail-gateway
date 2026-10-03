@@ -27,9 +27,9 @@ covered by tests, and a partial row names what is missing.
 | §8.3 after the model | done | Leakage, disallowed categories, structured-output schema, grounding and citations, embedded proposed actions, and disclaimer and abstention rules. Grounding is lexical overlap, not semantic entailment. |
 | §8.4 before a tool action | done | Allowlist, role authorization, side-effect class, tenant/resource, argument schema, SQL/filesystem/URL policy, approval, and a per-trace execution budget. Counters are per process; a shared store is planned with M9. |
 | §9 policy model | done | Every decision carries point, identity, tenant, policy version, verdict, reason code, evidence, digest, and latency. |
-| §10 content inspection | partial | Deterministic detectors with redacted evidence and base64 de-obfuscation. Presidio, reversible pseudonymization, canary leakage measurement, and wider encoding normalization are planned (M8). |
+| §10 content inspection | partial | Deterministic detectors with redacted evidence; normalization of base64, hex, percent-encoding, ROT13, letter-spacing, and Unicode tricks; per-tenant allow/redact/pseudonymize/deny rules; a separate pseudonym vault; canary secrets; a fail-closed Presidio adapter. A learned injection classifier and NeMo/Guardrails AI rails are not implemented. |
 | §11 action broker and sandbox | partial | Allowlist, strict per-tool Pydantic schemas, parsed SQL restricted to read-only queries, canonical paths and URLs, tenant checks, digest-bound approval. The execution sandbox is planned (M10). |
-| §12 red-team design | done | 59 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
+| §12 red-team design | done | 68 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
 | §13 information model | partial | SecurityDecision, DetectorEvidence, ActionRequest, ApprovalRecord, and RedTeamRun exist. IncidentCase is planned (M9). |
 | §14 events and analytics | partial | Structured, redacted decision events delivered through a transport port with ordered, bounded buffering. Kafka, ClickHouse, PostgreSQL, and Grafana adapters are planned (M9). |
 | §15 fail-safe behaviour | done | Policy engine, detectors, and audit transport sit behind ports with a fixed outcome when each is lost: fail closed for side effects, optional restricted read-only mode, bounded audit buffering, and blocking when mandatory audit durability is lost. |
@@ -72,13 +72,14 @@ Delivered:
   tenant, classification, and access list, with admitted documents returned
   as labeled untrusted evidence.
 
+- **M8 content inspection depth** (`v0.9.0`) — obfuscation normalization,
+  per-tenant entity rules, pseudonymization with a separate vault, canary
+  secrets, and a Presidio adapter.
+
 Planned, in the order the specification's risk ordering implies:
 
 - **M3b identity provider integration** — OIDC discovery and JWKS rotation,
   asymmetric verification against a live issuer.
-- **M8 content inspection depth (§10)** — Presidio, pseudonymization with a
-  separate mapping store, seeded canary leakage measurement, wider
-  encoding normalization.
 - **M9 events, analytics, and incidents (§13, §14, §17)** — Kafka transport,
   ClickHouse analytics, PostgreSQL for approvals and incident cases,
   Prometheus and OpenTelemetry.

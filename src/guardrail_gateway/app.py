@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from guardrail_gateway.approvals import ApprovalStore
 from guardrail_gateway.audit import AuditSink, AuditTransport
 from guardrail_gateway.config import Settings, get_settings
-from guardrail_gateway.detectors import ContentInspector
+from guardrail_gateway.detectors import ContentInspector, DeterministicInspector
 from guardrail_gateway.identity import (
     AuthenticationFailure,
     CredentialError,
@@ -30,9 +30,13 @@ from guardrail_gateway.models import (
     EnforcementPoint,
     HealthResponse,
     OutputInspectionRequest,
+    PseudonymRestoreRequest,
+    PseudonymRestoreResponse,
     SecurityDecision,
 )
 from guardrail_gateway.policy import PolicyEngine
+from guardrail_gateway.presidio import PresidioInspector
+from guardrail_gateway.sensitive import PseudonymVault
 from guardrail_gateway.service import GatewayService
 
 
@@ -79,6 +83,7 @@ def create_app(
     policy: PolicyEngine | None = None,
     inspectors: tuple[ContentInspector, ...] | None = None,
     audit_transport: AuditTransport | None = None,
+    vault: PseudonymVault | None = None,
 ) -> FastAPI:
     """Build the gateway; the keyword adapters replace the in-process defaults."""
 
@@ -89,12 +94,21 @@ def create_app(
         transport=audit_transport,
         mandatory=runtime_settings.audit_mandatory,
     )
-    service = GatewayService(runtime_settings, approvals, audit, policy, inspectors)
+    if inspectors is None and runtime_settings.presidio_url is not None:
+        inspectors = (
+            DeterministicInspector(),
+            PresidioInspector(
+                runtime_settings.presidio_url,
+                runtime_settings.presidio_timeout_seconds,
+                runtime_settings.presidio_score_threshold,
+            ),
+        )
+    service = GatewayService(runtime_settings, approvals, audit, policy, inspectors, vault=vault)
     verifier = IdentityVerifier(runtime_settings)
 
     application = FastAPI(
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.8.0",
+        version="0.9.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service
@@ -167,6 +181,21 @@ def create_app(
         principal: PrincipalDependency,
     ) -> SecurityDecision:
         return gateway.inspect_action(request, principal)
+
+    @application.post(
+        "/v1/pseudonyms/restore", response_model=PseudonymRestoreResponse, tags=["pseudonyms"]
+    )
+    def restore_pseudonyms(
+        request: PseudonymRestoreRequest,
+        gateway: GatewayDependency,
+        principal: PrincipalDependency,
+    ) -> PseudonymRestoreResponse:
+        restored = gateway.restore_pseudonyms(request, principal)
+        if restored is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="identity_assertion_mismatch"
+            )
+        return restored
 
     @application.get(
         "/v1/approvals/{approval_id}", response_model=ApprovalRecord, tags=["approval"]
