@@ -22,16 +22,18 @@ from guardrail_gateway.detectors import (
     redact_sensitive_content,
 )
 from guardrail_gateway.identity import Principal
-from guardrail_gateway.limits import ExecutionBudget, RateLimiter
+from guardrail_gateway.limits import ExecutionBudget, RateLimiter, ViolationHistory
 from guardrail_gateway.models import (
     ActionInspectionRequest,
     ContentInspectionRequest,
     DetectorEvidence,
     EnforcementPoint,
+    OutputInspectionRequest,
     SecurityDecision,
     SideEffect,
     Verdict,
 )
+from guardrail_gateway.output import OutputPolicyConfig, output_verdict
 from guardrail_gateway.policy import (
     LocalPolicyEngine,
     PolicyEngine,
@@ -42,6 +44,11 @@ from guardrail_gateway.policy import (
 # Effects that change nothing outside the gateway, and so may continue under
 # the built-in policy while the policy decision point is unreachable.
 _READ_ONLY_EFFECTS = frozenset({SideEffect.NONE, SideEffect.READ})
+# Denials that show an identity is probing the detectors for a bypass.
+_VIOLATION_REASONS = frozenset(
+    {"prompt_injection_detected", "obfuscated_content_detected", "embedded_action_detected"}
+)
+_LOCAL_ONLY = "local_only"
 
 
 class GatewayService:
@@ -63,6 +70,12 @@ class GatewayService:
         self._identity_quota = RateLimiter(settings.identity_requests_per_minute, clock=clock)
         self._tenant_quota = RateLimiter(settings.tenant_requests_per_minute, clock=clock)
         self._budget = ExecutionBudget(settings.max_actions_per_trace)
+        self._violations = ViolationHistory(
+            settings.violation_lockout_threshold,
+            settings.violation_window_seconds,
+            clock=clock,
+        )
+        self._output_policy = OutputPolicyConfig.from_settings(settings)
 
     def inspect_content(
         self,
@@ -71,13 +84,17 @@ class GatewayService:
         principal: Principal,
     ) -> SecurityDecision:
         started = perf_counter()
+        offender = (principal.tenant_id, principal.identity)
 
         def decide(
             verdict: Verdict,
             reason: str,
             evidence: list[DetectorEvidence] | None = None,
             transformed: str | None = None,
+            route: str | None = None,
         ) -> SecurityDecision:
+            if reason in _VIOLATION_REASONS:
+                self._violations.record(offender)
             return self._publish(
                 SecurityDecision(
                     request_id=request.request_id,
@@ -89,6 +106,7 @@ class GatewayService:
                     reason_code=reason,
                     evidence=evidence or [],
                     transformed_content=transformed,
+                    route=route,
                     latency_ms=self._latency(started),
                 )
             )
@@ -99,6 +117,10 @@ class GatewayService:
             return decide(Verdict.DENY, "audit_durability_unavailable")
         if not self._within_quota(principal):
             return decide(Verdict.DENY, "quota_exceeded")
+        if self._violations.locked(offender):
+            return decide(Verdict.DENY, "repeated_policy_violations")
+        if not self._model_eligible(request.model):
+            return decide(Verdict.DENY, "model_not_eligible")
         if len(request.content) > self.settings.max_content_chars:
             return decide(Verdict.DENY, "content_size_exceeded")
 
@@ -121,9 +143,20 @@ class GatewayService:
             if verdict is Verdict.ALLOW:
                 reason = "restricted_read_only_mode"
 
+        if verdict is Verdict.TRANSFORM and request.model in self.settings.local_only_models:
+            # Section 8.1: sensitive content may reach a model that runs inside
+            # the trusted boundary intact, and nowhere else.
+            return decide(
+                Verdict.ALLOW, "sensitive_content_local_only", evidence, None, _LOCAL_ONLY
+            )
+
         transformed = (
             redact_sensitive_content(request.content) if verdict is Verdict.TRANSFORM else None
         )
+        if verdict is Verdict.ALLOW and isinstance(request, OutputInspectionRequest):
+            verdict, output_reason, transformed = output_verdict(request, self._output_policy)
+            if verdict is not Verdict.ALLOW or output_reason != "policy_allow":
+                reason = output_reason
         return decide(verdict, reason, evidence, transformed)
 
     def inspect_action(
@@ -194,6 +227,12 @@ class GatewayService:
                 approval_id = approval.approval_id
 
         return decide(verdict, reason, digest, approval_id)
+
+    def _model_eligible(self, model: str | None) -> bool:
+        """A named model must be one the deployment permits, when it restricts them."""
+
+        permitted = self.settings.eligible_models + self.settings.local_only_models
+        return model is None or not permitted or model in permitted
 
     def _within_quota(self, principal: Principal) -> bool:
         """Count the request against its identity, then against its tenant.

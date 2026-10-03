@@ -4,13 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "guardrail-gateway"
-version = "0.6.0"
+version = "0.7.0"
 description = "Policy-aware security gateway for LLM and agent workflows"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
   "fastapi>=0.116,<1.0",
+  "jsonschema>=4.23,<5.0",
   "pydantic-settings>=2.10,<3.0",
   "pyjwt[crypto]>=2.10,<3.0",
   "sqlglot>=27.0,<32.0",
@@ -26,6 +27,7 @@ dev = [
   "pytest>=9.0.3,<10.0",
   "pytest-cov>=6.2,<8.0",
   "ruff>=0.12,<1.0",
+  "types-jsonschema>=4.23,<5.0",
 ]
 
 [tool.hatch.build.targets.wheel]

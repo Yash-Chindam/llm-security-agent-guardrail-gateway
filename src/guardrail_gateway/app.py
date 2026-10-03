@@ -27,6 +27,7 @@ from guardrail_gateway.models import (
     ContentInspectionRequest,
     EnforcementPoint,
     HealthResponse,
+    OutputInspectionRequest,
     SecurityDecision,
 )
 from guardrail_gateway.policy import PolicyEngine
@@ -91,7 +92,7 @@ def create_app(
 
     application = FastAPI(
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.6.0",
+        version="0.7.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service
@@ -141,7 +142,7 @@ def create_app(
 
     @application.post("/v1/inspect/output", response_model=SecurityDecision, tags=["inspection"])
     def inspect_output(
-        request: ContentInspectionRequest,
+        request: OutputInspectionRequest,
         gateway: GatewayDependency,
         principal: PrincipalDependency,
     ) -> SecurityDecision:

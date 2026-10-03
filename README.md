@@ -97,6 +97,43 @@ argument schema, tool-specific policy, then approval for any side effect.
   literals and embedded credentials are refused, which closes the usual routes
   to loopback, private ranges, and cloud metadata endpoints.
 
+## Output enforcement
+
+`POST /v1/inspect/output` checks more than leakage. After content inspection
+passes, the application's own requirements are applied, all deterministically:
+
+| Request field | Check | Reason code |
+|---|---|---|
+| `output_schema` | Output parses as JSON and satisfies the JSON Schema. A malformed schema, or one needing an external reference, is refused; references are never fetched. | `structured_output_invalid`, `structured_output_schema_invalid` |
+| `sources` | Every `[id]` citation names a source the model was given, and each cited sentence shares enough terms with its sources. | `citation_unknown_source`, `citation_not_supported` |
+| `require_citations` | An answer with no citation is denied, unless it declines to answer. | `citation_required`, `abstention_accepted` |
+| `required_disclaimer` | A missing disclaimer is appended and returned as a transform. | `disclaimer_appended` |
+
+A tool call carried in model output or in a retrieved document, as tool-call
+markup, a JSON call object, or a registered tool invoked by name, is denied with
+`embedded_action_detected`: an action has to be proposed to the action broker,
+where it is authorized and bound to an approval.
+`GUARDRAIL_DISALLOWED_OUTPUT_TERMS` maps application-specific categories to
+terms a response may not contain.
+
+Grounding is lexical overlap (`GUARDRAIL_GROUNDING_MIN_OVERLAP`, 0.5), which
+catches an invented or borrowed citation but does not judge whether a
+paraphrase is faithful.
+
+## Model eligibility and routing
+
+A content request may name the `model` it is destined for.
+
+- `GUARDRAIL_ELIGIBLE_MODELS` and `GUARDRAIL_LOCAL_ONLY_MODELS` (JSON lists)
+  restrict which models are permitted; a model in neither is denied with
+  `model_not_eligible`. With both empty, no restriction applies.
+- Sensitive content bound for an external model is redacted. Bound for a
+  local-only model, it is allowed intact with `route: "local_only"`, so the
+  application can keep it inside the trusted boundary.
+- `GUARDRAIL_VIOLATION_LOCKOUT_THRESHOLD` locks an identity out with
+  `repeated_policy_violations` after that many injection denials inside
+  `GUARDRAIL_VIOLATION_WINDOW_SECONDS`. It is off by default.
+
 ## Quotas and execution budgets
 
 Resource exhaustion is a named threat in the design specification: a request

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Self
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Verdict(StrEnum):
@@ -59,6 +59,34 @@ class ContentInspectionRequest(BaseModel):
     content: str = Field(min_length=1)
     trust_level: TrustLevel = TrustLevel.UNTRUSTED
     source_tenant_id: str | None = Field(default=None, max_length=100)
+    # The model the content is destined for, checked for eligibility.
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class Source(BaseModel):
+    """A retrieved document the model was given to ground its answer on."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.:-]+$")
+    content: str = Field(min_length=1, max_length=50_000)
+
+
+class OutputInspectionRequest(ContentInspectionRequest):
+    """Model output, with the requirements the application places on it."""
+
+    # A JSON Schema the output must parse as and satisfy.
+    output_schema: dict[str, Any] | None = None
+    sources: list[Source] = Field(default_factory=list, max_length=50)
+    require_citations: bool = False
+    required_disclaimer: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _disclaimer_needs_prose(self) -> Self:
+        # Appending text to a structured document would break the schema.
+        if self.output_schema is not None and self.required_disclaimer is not None:
+            raise ValueError("required_disclaimer cannot be combined with output_schema")
+        return self
 
 
 class ActionInspectionRequest(BaseModel):
@@ -90,6 +118,8 @@ class SecurityDecision(BaseModel):
     transformed_content: str | None = None
     action_digest: str | None = None
     approval_id: UUID | None = None
+    # Where the content may be sent, when policy constrains it.
+    route: str | None = None
     latency_ms: float = Field(ge=0)
 
 

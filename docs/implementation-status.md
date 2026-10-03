@@ -22,14 +22,14 @@ covered by tests, and a partial row names what is missing.
 
 | Section | Status | Notes |
 |---|---|---|
-| §8.1 before the model | partial | Identity, tenant, quota, injection, PII/secret, and size are enforced. Model eligibility with local-only routing and known-violation history are planned (M6). |
+| §8.1 before the model | done | Identity, tenant, quota, injection, PII/secret, size, model eligibility, local-only routing, and violation history are enforced. Encoding normalization beyond base64 is tracked under §10. |
 | §8.2 retrieved context | partial | Source/tenant labels, trust class, embedded instructions, and size are enforced. Per-document authorization is planned (M7). |
-| §8.3 after the model | partial | PII and secret leakage are enforced. Structured-output schema, grounding/citation, embedded proposed actions, and abstention rules are planned (M6). |
+| §8.3 after the model | done | Leakage, disallowed categories, structured-output schema, grounding and citations, embedded proposed actions, and disclaimer and abstention rules. Grounding is lexical overlap, not semantic entailment. |
 | §8.4 before a tool action | done | Allowlist, role authorization, side-effect class, tenant/resource, argument schema, SQL/filesystem/URL policy, approval, and a per-trace execution budget. Counters are per process; a shared store is planned with M9. |
 | §9 policy model | done | Every decision carries point, identity, tenant, policy version, verdict, reason code, evidence, digest, and latency. |
 | §10 content inspection | partial | Deterministic detectors with redacted evidence and base64 de-obfuscation. Presidio, reversible pseudonymization, canary leakage measurement, and wider encoding normalization are planned (M8). |
 | §11 action broker and sandbox | partial | Allowlist, strict per-tool Pydantic schemas, parsed SQL restricted to read-only queries, canonical paths and URLs, tenant checks, digest-bound approval. The execution sandbox is planned (M10). |
-| §12 red-team design | done | 42 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
+| §12 red-team design | done | 52 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
 | §13 information model | partial | SecurityDecision, DetectorEvidence, ActionRequest, ApprovalRecord, and RedTeamRun exist. IncidentCase is planned (M9). |
 | §14 events and analytics | partial | Structured, redacted decision events delivered through a transport port with ordered, bounded buffering. Kafka, ClickHouse, PostgreSQL, and Grafana adapters are planned (M9). |
 | §15 fail-safe behaviour | done | Policy engine, detectors, and audit transport sit behind ports with a fixed outcome when each is lost: fail closed for side effects, optional restricted read-only mode, bounded audit buffering, and blocking when mandatory audit durability is lost. |
@@ -63,13 +63,15 @@ Delivered:
 - **M5b quotas and execution budgets** (`v0.6.0`) — per-identity and
   per-tenant rate limits and a per-trace action budget, all bounded.
 
+- **M6 output enforcement and model routing** (`v0.7.0`) — structured-output
+  schema, grounding and citations, embedded actions, disclaimer and
+  abstention rules, model eligibility, local-only routing, and violation
+  lockout.
+
 Planned, in the order the specification's risk ordering implies:
 
 - **M3b identity provider integration** — OIDC discovery and JWKS rotation,
   asymmetric verification against a live issuer.
-- **M6 output enforcement and model routing (§8.1, §8.3)** — structured-output
-  schema validation, grounding and citation requirements, proposed actions
-  embedded in prose, and model eligibility with local-only routing.
 - **M7 context authorization (§8.2)** — per-document identity-bound filters.
 - **M8 content inspection depth (§10)** — Presidio, pseudonymization with a
   separate mapping store, seeded canary leakage measurement, wider

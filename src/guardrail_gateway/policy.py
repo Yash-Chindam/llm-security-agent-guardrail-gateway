@@ -50,6 +50,14 @@ def content_verdict(
         return Verdict.DENY, "obfuscated_content_detected"
 
     categories = {item.category for item in evidence}
+    # A tool call belongs at the action endpoint, where it is authorized and
+    # bound to an approval. One carried in model output or in a retrieved
+    # document is an attempt to have it executed without either.
+    if "embedded_action" in categories and point in (
+        EnforcementPoint.OUTPUT,
+        EnforcementPoint.CONTEXT,
+    ):
+        return Verdict.DENY, "embedded_action_detected"
     if categories & {"prompt_injection", "jailbreak"} and (
         point is EnforcementPoint.CONTEXT or trust_level is TrustLevel.UNTRUSTED
     ):
