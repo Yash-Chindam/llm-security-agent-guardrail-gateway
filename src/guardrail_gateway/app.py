@@ -9,8 +9,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from guardrail_gateway.approvals import ApprovalStore
-from guardrail_gateway.audit import AuditSink
+from guardrail_gateway.audit import AuditSink, AuditTransport
 from guardrail_gateway.config import Settings, get_settings
+from guardrail_gateway.detectors import ContentInspector
 from guardrail_gateway.identity import (
     AuthenticationFailure,
     CredentialError,
@@ -28,6 +29,7 @@ from guardrail_gateway.models import (
     HealthResponse,
     SecurityDecision,
 )
+from guardrail_gateway.policy import PolicyEngine
 from guardrail_gateway.service import GatewayService
 
 
@@ -68,16 +70,28 @@ GatewayDependency = Annotated[GatewayService, Depends(get_gateway_service)]
 PrincipalDependency = Annotated[Principal, Depends(authenticated_principal)]
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    policy: PolicyEngine | None = None,
+    inspectors: tuple[ContentInspector, ...] | None = None,
+    audit_transport: AuditTransport | None = None,
+) -> FastAPI:
+    """Build the gateway; the keyword adapters replace the in-process defaults."""
+
     runtime_settings = settings or get_settings()
     approvals = ApprovalStore(runtime_settings.approval_ttl_seconds)
-    audit = AuditSink(runtime_settings.audit_buffer_size)
-    service = GatewayService(runtime_settings, approvals, audit)
+    audit = AuditSink(
+        runtime_settings.audit_buffer_size,
+        transport=audit_transport,
+        mandatory=runtime_settings.audit_mandatory,
+    )
+    service = GatewayService(runtime_settings, approvals, audit, policy, inspectors)
     verifier = IdentityVerifier(runtime_settings)
 
     application = FastAPI(
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.3.0",
+        version="0.4.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service
@@ -89,19 +103,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status="ok",
             policy_version=runtime_settings.policy_version,
             identity_verification=_verification_state(verifier),
+            audit=audit.state(),
         )
 
     @application.get("/health/ready", response_model=HealthResponse, tags=["health"])
     def ready() -> JSONResponse:
-        # Not ready while no credential can be verified: the gateway is running
-        # but every enforcement request will be refused, and a load balancer
-        # should see that rather than send traffic into a closed gate.
+        # Not ready while no credential can be verified or no decision can be
+        # audited: the gateway is running but every enforcement request will be
+        # refused, and a load balancer should see that rather than send traffic
+        # into a closed gate.
+        audit_state = audit.state()
+        serving = verifier.configured and audit_state != "blocked"
         body = HealthResponse(
-            status="ready" if verifier.configured else "not_ready",
+            status="ready" if serving else "not_ready",
             policy_version=runtime_settings.policy_version,
             identity_verification=_verification_state(verifier),
+            audit=audit_state,
         )
-        code = status.HTTP_200_OK if verifier.configured else status.HTTP_503_SERVICE_UNAVAILABLE
+        code = status.HTTP_200_OK if serving else status.HTTP_503_SERVICE_UNAVAILABLE
         return JSONResponse(status_code=code, content=body.model_dump())
 
     @application.post("/v1/inspect/input", response_model=SecurityDecision, tags=["inspection"])

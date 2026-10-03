@@ -31,8 +31,8 @@ covered by tests, and a partial row names what is missing.
 | §11 action broker and sandbox | partial | Allowlist, tenant checks, digest-bound approval. Per-tool Pydantic schemas, a real SQL parser, path/URL canonicalization, and the execution sandbox are planned (M5, M10). |
 | §12 red-team design | done | 31 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
 | §13 information model | partial | SecurityDecision, DetectorEvidence, ActionRequest, ApprovalRecord, and RedTeamRun exist. IncidentCase is planned (M9). |
-| §14 events and analytics | partial | Structured, redacted decision events in a bounded sink. Kafka, ClickHouse, PostgreSQL, and Grafana are planned (M9). |
-| §15 fail-safe behaviour | partial | Identity verification fails closed; approvals expire and are re-reviewed. The remaining dependency matrix and audit-durability blocking are planned (M4). |
+| §14 events and analytics | partial | Structured, redacted decision events delivered through a transport port with ordered, bounded buffering. Kafka, ClickHouse, PostgreSQL, and Grafana adapters are planned (M9). |
+| §15 fail-safe behaviour | done | Policy engine, detectors, and audit transport sit behind ports with a fixed outcome when each is lost: fail closed for side effects, optional restricted read-only mode, bounded audit buffering, and blocking when mandatory audit durability is lost. |
 | §16 platform security | partial | Verified bearer identity, non-root image, no build tooling in runtime, Trivy, SBOM, provenance. OIDC discovery, secret manager, NetworkPolicies, image signing, and Falco are planned (M3b, M10). |
 | §17 observability | partial | The red-team suite reports the required rates and latency percentiles. A runtime metrics endpoint and traces are planned (M9). |
 | §18 deployment topology | planned | Compose and Helm topology (M10). |
@@ -52,12 +52,14 @@ Delivered:
   duties, tenant-scoped approvals, fail-closed when no signing material is
   configured.
 
+- **M4 fail-safe dependency behaviour** (`v0.4.0`) — ports for the policy
+  engine, detectors, and audit transport, with the section 15 outcome for each
+  failure and an audit state on the readiness probe.
+
 Planned, in the order the specification's risk ordering implies:
 
 - **M3b identity provider integration** — OIDC discovery and JWKS rotation,
   asymmetric verification against a live issuer.
-- **M4 fail-safe dependency behaviour (§15)** — the full condition matrix,
-  circuit breakers, and blocking when mandatory audit durability cannot be met.
 - **M5 authorization, quotas, and action-broker hardening (§8.4, §11)** —
   role-to-tool permissions, per-identity and per-tenant budgets, per-tool
   Pydantic schemas, SQL parsing, path and URL canonicalization.

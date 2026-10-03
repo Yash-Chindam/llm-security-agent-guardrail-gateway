@@ -23,6 +23,7 @@ def test_health(client: TestClient) -> None:
         "status": "ready",
         "policy_version": "test-policy",
         "identity_verification": "configured",
+        "audit": "durable",
     }
 
 
