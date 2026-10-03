@@ -8,7 +8,8 @@ a request half-enforced.
 
 from __future__ import annotations
 
-from time import perf_counter
+from collections.abc import Callable
+from time import monotonic, perf_counter
 from uuid import UUID
 
 from guardrail_gateway.approvals import ApprovalStore
@@ -21,6 +22,7 @@ from guardrail_gateway.detectors import (
     redact_sensitive_content,
 )
 from guardrail_gateway.identity import Principal
+from guardrail_gateway.limits import ExecutionBudget, RateLimiter
 from guardrail_gateway.models import (
     ActionInspectionRequest,
     ContentInspectionRequest,
@@ -50,6 +52,7 @@ class GatewayService:
         audit: AuditSink,
         policy: PolicyEngine | None = None,
         inspectors: tuple[ContentInspector, ...] | None = None,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         self.settings = settings
         self.approvals = approvals
@@ -57,6 +60,9 @@ class GatewayService:
         self.policy: PolicyEngine = policy or LocalPolicyEngine(settings)
         self.inspectors: tuple[ContentInspector, ...] = inspectors or (DeterministicInspector(),)
         self._restricted_policy = LocalPolicyEngine(settings)
+        self._identity_quota = RateLimiter(settings.identity_requests_per_minute, clock=clock)
+        self._tenant_quota = RateLimiter(settings.tenant_requests_per_minute, clock=clock)
+        self._budget = ExecutionBudget(settings.max_actions_per_trace)
 
     def inspect_content(
         self,
@@ -91,6 +97,8 @@ class GatewayService:
             return decide(Verdict.DENY, "identity_assertion_mismatch")
         if not self.audit.accepting():
             return decide(Verdict.DENY, "audit_durability_unavailable")
+        if not self._within_quota(principal):
+            return decide(Verdict.DENY, "quota_exceeded")
         if len(request.content) > self.settings.max_content_chars:
             return decide(Verdict.DENY, "content_size_exceeded")
 
@@ -148,8 +156,14 @@ class GatewayService:
             return decide(Verdict.DENY, "identity_assertion_mismatch")
         if not self.audit.accepting():
             return decide(Verdict.DENY, "audit_durability_unavailable")
+        if not self._within_quota(principal):
+            return decide(Verdict.DENY, "quota_exceeded")
 
         digest = action_digest(request)
+        # Counted before policy runs, so a loop of refused actions spends the
+        # budget exactly as a loop of permitted ones does.
+        if not self._budget.consume((principal.tenant_id, request.trace_id)):
+            return decide(Verdict.DENY, "execution_budget_exceeded", digest)
         try:
             verdict, reason = self.policy.action_verdict(request, principal.roles)
         except PolicyEngineUnavailableError:
@@ -180,6 +194,17 @@ class GatewayService:
                 approval_id = approval.approval_id
 
         return decide(verdict, reason, digest, approval_id)
+
+    def _within_quota(self, principal: Principal) -> bool:
+        """Count the request against its identity, then against its tenant.
+
+        The identity is checked first so one noisy caller is stopped by its own
+        limit before it can spend the quota its whole tenant shares.
+        """
+
+        if not self._identity_quota.allow((principal.tenant_id, principal.identity)):
+            return False
+        return self._tenant_quota.allow(principal.tenant_id)
 
     def _evidence(self, content: str) -> list[DetectorEvidence]:
         """Union every inspector's evidence.
