@@ -48,6 +48,17 @@ _RULES: tuple[MatchRule, ...] = (
         "Instruction requests protected context or credentials.",
     ),
     MatchRule(
+        "prompt_injection",
+        re.compile(
+            r"<\|(?:im_start|im_end|system|assistant|user|endoftext)\|>"
+            r"|\[/?INST\]|<<\s*/?SYS\s*>>"
+            r"|</?\s*untrusted_evidence\b",
+            re.IGNORECASE,
+        ),
+        0.97,
+        "Content carries chat-template control tokens that forge a message boundary.",
+    ),
+    MatchRule(
         "jailbreak",
         re.compile(
             r"\b(?:with|having)\s+no\s+(?:\w+\s+){0,2}"

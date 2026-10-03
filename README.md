@@ -97,6 +97,38 @@ argument schema, tool-specific policy, then approval for any side effect.
   literals and embedded credentials are refused, which closes the usual routes
   to loopback, private ranges, and cloud metadata endpoints.
 
+## Retrieved context
+
+`POST /v1/inspect/context/batch` takes every document a retrieval step wants to
+place before the model and decides each one on its own labels. A batch is never
+accepted or refused as a whole.
+
+| Document field | Rule | Reason code |
+|---|---|---|
+| `source_tenant_id` | Must be the caller's tenant. | `cross_tenant_context` |
+| `classification` | `public`, `internal`, `confidential`, or `restricted`; the caller's `clearance` claim must be at least as high. | `document_not_authorized` |
+| `allowed_identities`, `allowed_roles` | When either is set, the caller must be listed. Clearance never overrides an access list. | `document_not_authorized` |
+| `content` | Inspected like any context; sensitive values are redacted. | `prompt_injection_detected`, `embedded_action_detected`, ... |
+| size | Each document is bounded, and the batch by `GUARDRAIL_MAX_CONTEXT_CHARS`; documents past the budget are dropped in order. | `content_size_exceeded`, `context_budget_exceeded` |
+
+The batch verdict is `allow` when every document is admitted unchanged,
+`transform` (`context_filtered`) when some were dropped or redacted, and `deny`
+(`no_authorized_context`) when none survive. Every document decision is audited
+as well as the batch.
+
+Admitted content is returned wrapped as untrusted evidence, so the application
+never has to merge retrieved text with its instructions:
+
+```text
+<untrusted_evidence id="kb-1" source_tenant="acme" trust="untrusted">
+Refunds are issued within 14 days of purchase.
+</untrusted_evidence>
+```
+
+A document cannot open or close that envelope itself. Chat-template control
+tokens and envelope tags inside a document are treated as an injection, and the
+tag is made inert in anything that is admitted.
+
 ## Output enforcement
 
 `POST /v1/inspect/output` checks more than leakage. After content inspection

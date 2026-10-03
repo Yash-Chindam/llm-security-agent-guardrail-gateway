@@ -25,6 +25,8 @@ from guardrail_gateway.models import (
     ApprovalRecord,
     ApprovalStatus,
     ContentInspectionRequest,
+    ContextBatchDecision,
+    ContextBatchRequest,
     EnforcementPoint,
     HealthResponse,
     OutputInspectionRequest,
@@ -92,7 +94,7 @@ def create_app(
 
     application = FastAPI(
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.7.0",
+        version="0.8.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service
@@ -139,6 +141,16 @@ def create_app(
         principal: PrincipalDependency,
     ) -> SecurityDecision:
         return gateway.inspect_content(request, EnforcementPoint.CONTEXT, principal)
+
+    @application.post(
+        "/v1/inspect/context/batch", response_model=ContextBatchDecision, tags=["inspection"]
+    )
+    def inspect_context_batch(
+        request: ContextBatchRequest,
+        gateway: GatewayDependency,
+        principal: PrincipalDependency,
+    ) -> ContextBatchDecision:
+        return gateway.inspect_context_batch(request, principal)
 
     @application.post("/v1/inspect/output", response_model=SecurityDecision, tags=["inspection"])
     def inspect_output(

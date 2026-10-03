@@ -29,6 +29,18 @@ class TrustLevel(StrEnum):
     UNTRUSTED = "untrusted"
 
 
+class Classification(StrEnum):
+    """Data sensitivity, in increasing order of the clearance needed to read it."""
+
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    CONFIDENTIAL = "confidential"
+    RESTRICTED = "restricted"
+
+    def rank(self) -> int:
+        return list(Classification).index(self)
+
+
 class SideEffect(StrEnum):
     NONE = "none"
     READ = "read"
@@ -89,6 +101,34 @@ class OutputInspectionRequest(ContentInspectionRequest):
         return self
 
 
+class ContextDocument(BaseModel):
+    """One retrieved document with the labels its authorization depends on."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.:/-]+$")
+    content: str = Field(min_length=1)
+    # The tenant that owns the document, as recorded by the retrieval system.
+    source_tenant_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
+    trust_level: TrustLevel = TrustLevel.UNTRUSTED
+    classification: Classification = Classification.INTERNAL
+    # When set, only these identities or holders of these roles may read it.
+    allowed_identities: list[str] | None = Field(default=None, max_length=200)
+    allowed_roles: list[str] | None = Field(default=None, max_length=50)
+
+
+class ContextBatchRequest(BaseModel):
+    """Every document a retrieval step wants to place in front of the model."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    request_id: UUID = Field(default_factory=uuid4)
+    trace_id: UUID = Field(default_factory=uuid4)
+    identity: str = Field(min_length=1, max_length=200)
+    tenant_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
+    documents: list[ContextDocument] = Field(min_length=1, max_length=100)
+
+
 class ActionInspectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -120,6 +160,34 @@ class SecurityDecision(BaseModel):
     approval_id: UUID | None = None
     # Where the content may be sent, when policy constrains it.
     route: str | None = None
+    latency_ms: float = Field(ge=0)
+
+
+class DocumentDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str
+    verdict: Verdict
+    reason_code: str
+    evidence: list[DetectorEvidence] = Field(default_factory=list)
+    # The document as it may be shown to the model: redacted where needed and
+    # wrapped as untrusted evidence. Absent when the document was refused.
+    content: str | None = None
+
+
+class ContextBatchDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision_id: UUID = Field(default_factory=uuid4)
+    request_id: UUID
+    trace_id: UUID
+    enforcement_point: EnforcementPoint = EnforcementPoint.CONTEXT
+    tenant_id: str
+    policy_version: str
+    verdict: Verdict
+    reason_code: str
+    documents: list[DocumentDecision] = Field(default_factory=list)
+    admitted: int = Field(ge=0)
     latency_ms: float = Field(ge=0)
 
 

@@ -8,6 +8,7 @@ a request half-enforced.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from time import monotonic, perf_counter
 from uuid import UUID
@@ -26,11 +27,16 @@ from guardrail_gateway.limits import ExecutionBudget, RateLimiter, ViolationHist
 from guardrail_gateway.models import (
     ActionInspectionRequest,
     ContentInspectionRequest,
+    ContextBatchDecision,
+    ContextBatchRequest,
+    ContextDocument,
     DetectorEvidence,
+    DocumentDecision,
     EnforcementPoint,
     OutputInspectionRequest,
     SecurityDecision,
     SideEffect,
+    TrustLevel,
     Verdict,
 )
 from guardrail_gateway.output import OutputPolicyConfig, output_verdict
@@ -49,6 +55,9 @@ _VIOLATION_REASONS = frozenset(
     {"prompt_injection_detected", "obfuscated_content_detected", "embedded_action_detected"}
 )
 _LOCAL_ONLY = "local_only"
+# A document that names the envelope could close it early and continue as
+# if it were outside, so the tag is made inert inside admitted content.
+_ENVELOPE_TAG = re.compile(r"<(/?\s*untrusted_evidence)", re.IGNORECASE)
 
 
 class GatewayService:
@@ -124,24 +133,15 @@ class GatewayService:
         if len(request.content) > self.settings.max_content_chars:
             return decide(Verdict.DENY, "content_size_exceeded")
 
-        try:
-            evidence = self._evidence(request.content)
-        except DetectorUnavailableError:
-            # Uninspected content may carry anything, so it does not continue.
-            return decide(Verdict.DENY, "content_inspection_unavailable")
-
-        try:
-            verdict, reason = self.policy.content_verdict(
-                point, request.trust_level, request.source_tenant_id, request.tenant_id, evidence
-            )
-        except PolicyEngineUnavailableError:
-            if not self.settings.restricted_read_only_mode:
-                return decide(Verdict.DENY, "policy_engine_unavailable", evidence)
-            verdict, reason = self._restricted_policy.content_verdict(
-                point, request.trust_level, request.source_tenant_id, request.tenant_id, evidence
-            )
-            if verdict is Verdict.ALLOW:
-                reason = "restricted_read_only_mode"
+        verdict, reason, evidence = self._judge(
+            point,
+            request.trust_level,
+            request.source_tenant_id,
+            request.tenant_id,
+            request.content,
+        )
+        if verdict is Verdict.DENY:
+            return decide(verdict, reason, evidence)
 
         if verdict is Verdict.TRANSFORM and request.model in self.settings.local_only_models:
             # Section 8.1: sensitive content may reach a model that runs inside
@@ -158,6 +158,162 @@ class GatewayService:
             if verdict is not Verdict.ALLOW or output_reason != "policy_allow":
                 reason = output_reason
         return decide(verdict, reason, evidence, transformed)
+
+    def inspect_context_batch(
+        self, request: ContextBatchRequest, principal: Principal
+    ) -> ContextBatchDecision:
+        """Authorize and inspect each retrieved document on its own.
+
+        Section 8.2 requires authorization for every document. A batch is
+        therefore never accepted or refused as a whole: each document stands
+        or falls on its own labels, and what survives is returned wrapped as
+        untrusted evidence so it cannot pass for an instruction.
+        """
+
+        started = perf_counter()
+        offender = (principal.tenant_id, principal.identity)
+
+        def conclude(
+            verdict: Verdict, reason: str, documents: list[DocumentDecision] | None = None
+        ) -> ContextBatchDecision:
+            results = documents or []
+            decision = ContextBatchDecision(
+                request_id=request.request_id,
+                trace_id=request.trace_id,
+                tenant_id=principal.tenant_id,
+                policy_version=self.settings.policy_version,
+                verdict=verdict,
+                reason_code=reason,
+                documents=results,
+                admitted=sum(1 for item in results if item.content is not None),
+                latency_ms=self._latency(started),
+            )
+            self._publish(
+                SecurityDecision(
+                    decision_id=decision.decision_id,
+                    request_id=request.request_id,
+                    trace_id=request.trace_id,
+                    enforcement_point=EnforcementPoint.CONTEXT,
+                    tenant_id=principal.tenant_id,
+                    policy_version=self.settings.policy_version,
+                    verdict=verdict,
+                    reason_code=reason,
+                    latency_ms=decision.latency_ms,
+                )
+            )
+            return decision
+
+        if _asserts_another_identity(request.identity, request.tenant_id, principal):
+            return conclude(Verdict.DENY, "identity_assertion_mismatch")
+        if not self.audit.accepting():
+            return conclude(Verdict.DENY, "audit_durability_unavailable")
+        if not self._within_quota(principal):
+            return conclude(Verdict.DENY, "quota_exceeded")
+        if self._violations.locked(offender):
+            return conclude(Verdict.DENY, "repeated_policy_violations")
+
+        remaining = self.settings.max_context_chars
+        results: list[DocumentDecision] = []
+        for document in request.documents:
+            result = self._judge_document(document, principal, remaining)
+            if result.reason_code in _VIOLATION_REASONS:
+                self._violations.record(offender)
+            if result.content is not None:
+                remaining -= len(document.content)
+            # Each document is attributable on its own, not only the batch.
+            self._publish(
+                SecurityDecision(
+                    request_id=request.request_id,
+                    trace_id=request.trace_id,
+                    enforcement_point=EnforcementPoint.CONTEXT,
+                    tenant_id=principal.tenant_id,
+                    policy_version=self.settings.policy_version,
+                    verdict=result.verdict,
+                    reason_code=result.reason_code,
+                    evidence=result.evidence,
+                    latency_ms=self._latency(started),
+                )
+            )
+            results.append(result)
+
+        if not any(item.content is not None for item in results):
+            return conclude(Verdict.DENY, "no_authorized_context", results)
+        if all(item.verdict is Verdict.ALLOW for item in results):
+            return conclude(Verdict.ALLOW, "policy_allow", results)
+        return conclude(Verdict.TRANSFORM, "context_filtered", results)
+
+    def _judge_document(
+        self, document: ContextDocument, principal: Principal, remaining: int
+    ) -> DocumentDecision:
+        def refuse(reason: str, evidence: list[DetectorEvidence] | None = None) -> DocumentDecision:
+            return DocumentDecision(
+                document_id=document.id,
+                verdict=Verdict.DENY,
+                reason_code=reason,
+                evidence=evidence or [],
+            )
+
+        if document.source_tenant_id != principal.tenant_id:
+            return refuse("cross_tenant_context")
+        if not _may_read(document, principal):
+            return refuse("document_not_authorized")
+        if len(document.content) > self.settings.max_content_chars:
+            return refuse("content_size_exceeded")
+        if len(document.content) > remaining:
+            return refuse("context_budget_exceeded")
+
+        verdict, reason, evidence = self._judge(
+            EnforcementPoint.CONTEXT,
+            document.trust_level,
+            document.source_tenant_id,
+            principal.tenant_id,
+            document.content,
+        )
+        if verdict is Verdict.DENY:
+            return refuse(reason, evidence)
+
+        content = (
+            redact_sensitive_content(document.content)
+            if verdict is Verdict.TRANSFORM
+            else document.content
+        )
+        return DocumentDecision(
+            document_id=document.id,
+            verdict=verdict,
+            reason_code=reason,
+            evidence=evidence,
+            content=_as_untrusted_evidence(document, content),
+        )
+
+    def _judge(
+        self,
+        point: EnforcementPoint,
+        trust_level: TrustLevel,
+        source_tenant_id: str | None,
+        tenant_id: str,
+        content: str,
+    ) -> tuple[Verdict, str, list[DetectorEvidence]]:
+        """Inspect content and decide it, applying section 15 to each dependency."""
+
+        try:
+            evidence = self._evidence(content)
+        except DetectorUnavailableError:
+            # Uninspected content may carry anything, so it does not continue.
+            return Verdict.DENY, "content_inspection_unavailable", []
+
+        try:
+            verdict, reason = self.policy.content_verdict(
+                point, trust_level, source_tenant_id, tenant_id, evidence
+            )
+        except PolicyEngineUnavailableError:
+            if not self.settings.restricted_read_only_mode:
+                return Verdict.DENY, "policy_engine_unavailable", evidence
+            verdict, reason = self._restricted_policy.content_verdict(
+                point, trust_level, source_tenant_id, tenant_id, evidence
+            )
+            if verdict is Verdict.ALLOW:
+                reason = "restricted_read_only_mode"
+        return verdict, reason, evidence
 
     def inspect_action(
         self, request: ActionInspectionRequest, principal: Principal
@@ -276,3 +432,26 @@ def _asserts_another_identity(identity: str, tenant_id: str, principal: Principa
     """
 
     return identity != principal.identity or tenant_id != principal.tenant_id
+
+
+def _may_read(document: ContextDocument, principal: Principal) -> bool:
+    """Whether the caller's clearance and the document's access list both permit it."""
+
+    if document.classification.rank() > principal.clearance.rank():
+        return False
+    if document.allowed_identities is None and document.allowed_roles is None:
+        return True
+    if principal.identity in (document.allowed_identities or ()):
+        return True
+    held = {role.value for role in principal.roles}
+    return bool(held & set(document.allowed_roles or ()))
+
+
+def _as_untrusted_evidence(document: ContextDocument, content: str) -> str:
+    """Label a document so the model reads it as evidence, never as instruction."""
+
+    inert = _ENVELOPE_TAG.sub(r"&lt;\1", content)
+    return (
+        f'<untrusted_evidence id="{document.id}" source_tenant="{document.source_tenant_id}" '
+        f'trust="{document.trust_level.value}">\n{inert}\n</untrusted_evidence>'
+    )
