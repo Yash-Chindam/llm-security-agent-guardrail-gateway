@@ -148,20 +148,22 @@ def test_findings_carry_the_location_but_evidence_does_not_carry_the_value() -> 
 
 @pytest.mark.unit
 def test_a_canary_is_found_with_its_location() -> None:
-    inspector = CanaryInspector(("canary-7f3a9c2e1b",))
-    content = "debug dump: canary-7f3a9c2e1b and again canary-7f3a9c2e1b"
+    inspector = CanaryInspector(("canary-fixture-value",))
+    content = "debug dump: canary-fixture-value and again canary-fixture-value"
 
     findings = inspector.inspect(content)
 
     assert [finding.evidence.category for finding in findings] == ["canary", "canary"]
-    assert all("canary-7f3a9c2e1b" not in finding.evidence.redacted_excerpt for finding in findings)
-    assert content[findings[0].start : findings[0].end] == "canary-7f3a9c2e1b"
+    assert all(
+        "canary-fixture-value" not in finding.evidence.redacted_excerpt for finding in findings
+    )
+    assert content[findings[0].start : findings[0].end] == "canary-fixture-value"
 
 
 @pytest.mark.unit
 def test_an_encoded_canary_is_still_found() -> None:
-    inspector = CanaryInspector(("canary-7f3a9c2e1b",))
-    encoded = base64.b64encode(b"token=canary-7f3a9c2e1b").decode()
+    inspector = CanaryInspector(("canary-fixture-value",))
+    encoded = base64.b64encode(b"marker canary-fixture-value").decode()
 
     findings = inspector.inspect(f"blob {encoded}")
 
@@ -172,7 +174,7 @@ def test_an_encoded_canary_is_still_found() -> None:
 
 @pytest.mark.unit
 def test_content_without_a_canary_reports_nothing() -> None:
-    assert CanaryInspector(("canary-7f3a9c2e1b",)).inspect("an ordinary sentence") == []
+    assert CanaryInspector(("canary-fixture-value",)).inspect("an ordinary sentence") == []
 
 
 @pytest.mark.unit

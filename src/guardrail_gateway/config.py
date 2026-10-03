@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # Section 8.2. The most retrieved text one batch may place before the model.
     max_context_chars: int = Field(default=60_000, ge=100, le=10_000_000)
     audit_buffer_size: int = Field(default=1_000, ge=10, le=100_000)
+    # Sections 3 and 13. How many recent decisions and incident cases are kept
+    # for the reviewer and the auditor to read.
+    decision_log_size: int = Field(default=10_000, ge=10, le=1_000_000)
+    incident_store_size: int = Field(default=5_000, ge=10, le=1_000_000)
 
     # Section 15. When audit is mandatory, enforcement blocks once the outage
     # buffer is full; otherwise events beyond the bound are counted and dropped.

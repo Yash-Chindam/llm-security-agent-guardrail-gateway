@@ -6,6 +6,7 @@ on:
     types: [completed]
 
 permissions:
+  checks: read
   contents: write
   pull-requests: write
 
@@ -37,6 +38,31 @@ jobs:
             echo "Skipping stale CI result for PR #$PR_NUMBER."
             exit 0
           fi
+
+          # The CI workflow is not the only check on a commit. An external
+          # check such as secret scanning reports separately, so wait for every
+          # check on the tested SHA and refuse to merge over one that failed.
+          for attempt in $(seq 1 20); do
+            runs=$(gh api "repos/$REPOSITORY/commits/$TESTED_SHA/check-runs?per_page=100" \
+              --jq '[.check_runs[] | {name, status, conclusion}]')
+            running=$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")
+            if [ "$running" = "0" ]; then
+              break
+            fi
+            echo "Waiting for $running check(s) on $TESTED_SHA (attempt $attempt)."
+            sleep 15
+          done
+          if [ "$running" != "0" ]; then
+            echo "Skipping PR #$PR_NUMBER: checks are still running on $TESTED_SHA."
+            exit 0
+          fi
+          failed=$(jq -r '[.[] | select(.conclusion as $c
+            | ["success", "neutral", "skipped"] | index($c) | not) | .name] | join(", ")' <<<"$runs")
+          if [ -n "$failed" ]; then
+            echo "Skipping PR #$PR_NUMBER: failing check(s) on $TESTED_SHA: $failed"
+            exit 0
+          fi
+
           gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --merge --delete-branch
           merge_sha=$(gh pr view "$PR_NUMBER" --repo "$REPOSITORY" --json mergeCommit --jq .mergeCommit.oid)
           echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"

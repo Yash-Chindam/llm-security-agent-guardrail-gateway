@@ -24,7 +24,9 @@ from guardrail_gateway.detectors import (
     Finding,
 )
 from guardrail_gateway.identity import Principal
+from guardrail_gateway.incidents import DecisionLog, IncidentStore
 from guardrail_gateway.limits import ExecutionBudget, RateLimiter, ViolationHistory
+from guardrail_gateway.metrics import GatewayMetrics
 from guardrail_gateway.models import (
     ActionInspectionRequest,
     ContentInspectionRequest,
@@ -38,6 +40,7 @@ from guardrail_gateway.models import (
     PseudonymRestoreRequest,
     PseudonymRestoreResponse,
     SecurityDecision,
+    Severity,
     SideEffect,
     TrustLevel,
     Verdict,
@@ -64,6 +67,8 @@ _VIOLATION_REASONS = frozenset(
     {"prompt_injection_detected", "obfuscated_content_detected", "embedded_action_detected"}
 )
 _LOCAL_ONLY = "local_only"
+_CANARY_INCIDENT = "Canary secret observed"
+_SYSTEM_ACTOR = "guardrail-gateway"
 # A document that names the envelope could close it early and continue as
 # if it were outside, so the tag is made inert inside admitted content.
 _ENVELOPE_TAG = re.compile(r"<(/?\s*untrusted_evidence)", re.IGNORECASE)
@@ -101,6 +106,9 @@ class GatewayService:
             clock=clock,
         )
         self._output_policy = OutputPolicyConfig.from_settings(settings)
+        self.metrics = GatewayMetrics()
+        self.decisions = DecisionLog(settings.decision_log_size)
+        self.incidents = IncidentStore(settings.incident_store_size)
 
     def inspect_content(
         self,
@@ -471,7 +479,28 @@ class GatewayService:
 
     def _publish(self, decision: SecurityDecision) -> SecurityDecision:
         self.audit.publish(decision)
+        self.decisions.record(decision)
+        self.metrics.observe(decision)
+        if decision.reason_code == "canary_leak_detected":
+            self._open_canary_incident(decision)
         return decision
+
+    def _open_canary_incident(self, decision: SecurityDecision) -> None:
+        """A canary sighting is a leak by construction, so it opens its own case.
+
+        Further sightings in the same trace join the open case instead of
+        opening one each, so a single leak does not bury the queue.
+        """
+
+        existing = self.incidents.open_for_trace(
+            decision.trace_id, decision.tenant_id, _CANARY_INCIDENT
+        )
+        if existing is not None:
+            self.incidents.attach(existing.incident_id, decision)
+            return
+        self.incidents.open(
+            decision.tenant_id, _CANARY_INCIDENT, Severity.CRITICAL, _SYSTEM_ACTOR, [decision]
+        )
 
     @staticmethod
     def _latency(started: float) -> float:

@@ -38,6 +38,8 @@ class Role(StrEnum):
     # May propose tools that have a side effect, subject to approval.
     OPERATOR = "operator"
     REVIEWER = "reviewer"
+    # May read decisions and incident cases, and change nothing.
+    AUDITOR = "auditor"
 
 
 class AuthenticationFailure(StrEnum):

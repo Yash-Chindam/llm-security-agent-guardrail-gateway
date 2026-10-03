@@ -222,6 +222,7 @@ class PseudonymRestoreResponse(BaseModel):
 class ApprovalStatus(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
+    REJECTED = "rejected"
     CONSUMED = "consumed"
     EXPIRED = "expired"
 
@@ -244,6 +245,68 @@ class ApprovalDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     rationale: str = Field(min_length=3, max_length=1000)
+
+
+class Severity(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class IncidentStatus(StrEnum):
+    OPEN = "open"
+    INVESTIGATING = "investigating"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+
+
+class Disposition(StrEnum):
+    """What a reviewer concluded the related decisions were."""
+
+    UNDETERMINED = "undetermined"
+    TRUE_POSITIVE = "true_positive"
+    FALSE_POSITIVE = "false_positive"
+    BENIGN = "benign"
+
+
+class IncidentCase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: UUID = Field(default_factory=uuid4)
+    tenant_id: str
+    title: str
+    severity: Severity
+    status: IncidentStatus = IncidentStatus.OPEN
+    disposition: Disposition = Disposition.UNDETERMINED
+    decision_ids: list[UUID] = Field(default_factory=list)
+    trace_ids: list[UUID] = Field(default_factory=list)
+    remediation: str | None = None
+    opened_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class IncidentOpenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(min_length=3, max_length=200)
+    severity: Severity
+    decision_ids: list[UUID] = Field(min_length=1, max_length=100)
+
+
+class IncidentUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    status: IncidentStatus | None = None
+    disposition: Disposition | None = None
+    remediation: str | None = Field(default=None, min_length=1, max_length=5_000)
+
+    @model_validator(mode="after")
+    def _changes_something(self) -> Self:
+        if self.status is None and self.disposition is None and self.remediation is None:
+            raise ValueError("an update must change at least one field")
+        return self
 
 
 class HealthResponse(BaseModel):

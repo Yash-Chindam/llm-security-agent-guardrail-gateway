@@ -6,7 +6,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from guardrail_gateway.approvals import ApprovalStore
 from guardrail_gateway.audit import AuditSink, AuditTransport
@@ -19,6 +19,7 @@ from guardrail_gateway.identity import (
     Principal,
     Role,
 )
+from guardrail_gateway.metrics import CONTENT_TYPE
 from guardrail_gateway.models import (
     ActionInspectionRequest,
     ApprovalDecisionRequest,
@@ -29,6 +30,9 @@ from guardrail_gateway.models import (
     ContextBatchRequest,
     EnforcementPoint,
     HealthResponse,
+    IncidentCase,
+    IncidentOpenRequest,
+    IncidentUpdateRequest,
     OutputInspectionRequest,
     PseudonymRestoreRequest,
     PseudonymRestoreResponse,
@@ -58,6 +62,7 @@ def authenticated_principal(
         return verifier.verify(authorization)
     except CredentialError as error:
         service.audit.publish_rejection(error.failure.value, request.url.path)
+        service.metrics.observe_rejection(error.failure.value)
         # A missing verifier is the deployment's failure, not the caller's, and
         # section 15 requires that condition to be deterministic rather than
         # degrading into unauthenticated access.
@@ -108,7 +113,7 @@ def create_app(
 
     application = FastAPI(
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.9.0",
+        version="0.10.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service
@@ -212,17 +217,9 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Approval not found")
         return record
 
-    @application.post(
-        "/v1/approvals/{approval_id}/approve",
-        response_model=ApprovalRecord,
-        tags=["approval"],
-    )
-    def approve_action(
-        approval_id: UUID,
-        decision: ApprovalDecisionRequest,
-        gateway: GatewayDependency,
-        principal: PrincipalDependency,
-    ) -> ApprovalRecord:
+    def adjudicable(approval_id: UUID, gateway: GatewayService, principal: Principal) -> None:
+        """Refuse an adjudication the caller is not entitled to make."""
+
         if not principal.has_role(Role.REVIEWER):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -241,15 +238,134 @@ def create_app(
                 detail="self_approval_forbidden",
             )
 
-        approved = gateway.approvals.approve(approval_id, principal.identity, decision.rationale)
-        if approved is None:
+    def adjudicated(record: ApprovalRecord | None, outcome: ApprovalStatus) -> ApprovalRecord:
+        if record is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Approval not found")
-        if approved.status is not ApprovalStatus.APPROVED:
+        if record.status is not outcome:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Approval is {approved.status.value}",
+                detail=f"Approval is {record.status.value}",
             )
-        return approved
+        return record
+
+    @application.post(
+        "/v1/approvals/{approval_id}/approve",
+        response_model=ApprovalRecord,
+        tags=["approval"],
+    )
+    def approve_action(
+        approval_id: UUID,
+        decision: ApprovalDecisionRequest,
+        gateway: GatewayDependency,
+        principal: PrincipalDependency,
+    ) -> ApprovalRecord:
+        adjudicable(approval_id, gateway, principal)
+        approved = gateway.approvals.approve(approval_id, principal.identity, decision.rationale)
+        return adjudicated(approved, ApprovalStatus.APPROVED)
+
+    @application.post(
+        "/v1/approvals/{approval_id}/reject",
+        response_model=ApprovalRecord,
+        tags=["approval"],
+    )
+    def reject_action(
+        approval_id: UUID,
+        decision: ApprovalDecisionRequest,
+        gateway: GatewayDependency,
+        principal: PrincipalDependency,
+    ) -> ApprovalRecord:
+        adjudicable(approval_id, gateway, principal)
+        rejected = gateway.approvals.reject(approval_id, principal.identity, decision.rationale)
+        return adjudicated(rejected, ApprovalStatus.REJECTED)
+
+    def require_any(principal: Principal, *roles: Role) -> None:
+        if not any(principal.has_role(role) for role in roles):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="role_required")
+
+    @application.get("/v1/decisions/{decision_id}", response_model=SecurityDecision, tags=["audit"])
+    def get_decision(
+        decision_id: UUID, gateway: GatewayDependency, principal: PrincipalDependency
+    ) -> SecurityDecision:
+        require_any(principal, Role.AUDITOR, Role.REVIEWER)
+        decision = gateway.decisions.get(decision_id, principal.tenant_id)
+        if decision is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Decision not found")
+        return decision
+
+    @application.get("/v1/decisions", response_model=list[SecurityDecision], tags=["audit"])
+    def list_decisions(
+        trace_id: UUID, gateway: GatewayDependency, principal: PrincipalDependency
+    ) -> list[SecurityDecision]:
+        require_any(principal, Role.AUDITOR, Role.REVIEWER)
+        return gateway.decisions.for_trace(trace_id, principal.tenant_id)
+
+    @application.post(
+        "/v1/incidents",
+        response_model=IncidentCase,
+        status_code=status.HTTP_201_CREATED,
+        tags=["incidents"],
+    )
+    def open_incident(
+        request: IncidentOpenRequest, gateway: GatewayDependency, principal: PrincipalDependency
+    ) -> IncidentCase:
+        require_any(principal, Role.REVIEWER)
+        decisions = [
+            gateway.decisions.get(decision_id, principal.tenant_id)
+            for decision_id in request.decision_ids
+        ]
+        known = [decision for decision in decisions if decision is not None]
+        # A case may only cite decisions the caller's tenant can actually read,
+        # so it cannot be used to probe for another tenant's decision ids.
+        if len(known) != len(decisions):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Decision not found")
+        return gateway.incidents.open(
+            principal.tenant_id, request.title, request.severity, principal.identity, known
+        )
+
+    @application.get("/v1/incidents", response_model=list[IncidentCase], tags=["incidents"])
+    def list_incidents(
+        gateway: GatewayDependency, principal: PrincipalDependency
+    ) -> list[IncidentCase]:
+        require_any(principal, Role.AUDITOR, Role.REVIEWER)
+        return gateway.incidents.list(principal.tenant_id)
+
+    @application.get("/v1/incidents/{incident_id}", response_model=IncidentCase, tags=["incidents"])
+    def get_incident(
+        incident_id: UUID, gateway: GatewayDependency, principal: PrincipalDependency
+    ) -> IncidentCase:
+        require_any(principal, Role.AUDITOR, Role.REVIEWER)
+        incident = gateway.incidents.get(incident_id, principal.tenant_id)
+        if incident is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+        return incident
+
+    @application.patch(
+        "/v1/incidents/{incident_id}", response_model=IncidentCase, tags=["incidents"]
+    )
+    def update_incident(
+        incident_id: UUID,
+        request: IncidentUpdateRequest,
+        gateway: GatewayDependency,
+        principal: PrincipalDependency,
+    ) -> IncidentCase:
+        require_any(principal, Role.REVIEWER)
+        incident = gateway.incidents.update(
+            incident_id,
+            principal.tenant_id,
+            request.status,
+            request.disposition,
+            request.remediation,
+        )
+        if incident is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+        return incident
+
+    @application.get("/metrics", tags=["health"], include_in_schema=False)
+    def metrics() -> Response:
+        body = service.metrics.render(
+            approvals.counts, audit.pending, audit.dropped, service.incidents.open_count()
+        )
+        return Response(content=body, media_type=CONTENT_TYPE)
 
     return application
 
