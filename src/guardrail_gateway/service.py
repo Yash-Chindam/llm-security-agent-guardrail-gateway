@@ -8,6 +8,7 @@ from guardrail_gateway.approvals import ApprovalStore
 from guardrail_gateway.audit import AuditSink
 from guardrail_gateway.config import Settings
 from guardrail_gateway.detectors import inspect_content, redact_sensitive_content
+from guardrail_gateway.identity import Principal
 from guardrail_gateway.models import (
     ActionInspectionRequest,
     ContentInspectionRequest,
@@ -25,9 +26,26 @@ class GatewayService:
         self.audit = audit
 
     def inspect_content(
-        self, request: ContentInspectionRequest, point: EnforcementPoint
+        self,
+        request: ContentInspectionRequest,
+        point: EnforcementPoint,
+        principal: Principal,
     ) -> SecurityDecision:
         started = perf_counter()
+        if _asserts_another_identity(request.identity, request.tenant_id, principal):
+            return self._publish(
+                SecurityDecision(
+                    request_id=request.request_id,
+                    trace_id=request.trace_id,
+                    enforcement_point=point,
+                    tenant_id=principal.tenant_id,
+                    policy_version=self.settings.policy_version,
+                    verdict=Verdict.DENY,
+                    reason_code="identity_assertion_mismatch",
+                    latency_ms=self._latency(started),
+                )
+            )
+
         if len(request.content) > self.settings.max_content_chars:
             return self._publish(
                 SecurityDecision(
@@ -68,8 +86,24 @@ class GatewayService:
             )
         )
 
-    def inspect_action(self, request: ActionInspectionRequest) -> SecurityDecision:
+    def inspect_action(
+        self, request: ActionInspectionRequest, principal: Principal
+    ) -> SecurityDecision:
         started = perf_counter()
+        if _asserts_another_identity(request.identity, request.tenant_id, principal):
+            return self._publish(
+                SecurityDecision(
+                    request_id=request.request_id,
+                    trace_id=request.trace_id,
+                    enforcement_point=EnforcementPoint.ACTION,
+                    tenant_id=principal.tenant_id,
+                    policy_version=self.settings.policy_version,
+                    verdict=Verdict.DENY,
+                    reason_code="identity_assertion_mismatch",
+                    latency_ms=self._latency(started),
+                )
+            )
+
         digest = action_digest(request)
         verdict, reason = action_verdict(request)
         approval_id = None
@@ -108,3 +142,14 @@ class GatewayService:
     @staticmethod
     def _latency(started: float) -> float:
         return max(round((perf_counter() - started) * 1_000, 3), 0.001)
+
+
+def _asserts_another_identity(identity: str, tenant_id: str, principal: Principal) -> bool:
+    """True when the body claims an identity or tenant the credential does not prove.
+
+    A verified principal is the only authority for who is calling. Every tenant
+    and resource check downstream reads the request body, so a body that
+    disagrees with the credential is refused rather than reconciled.
+    """
+
+    return identity != principal.identity or tenant_id != principal.tenant_id

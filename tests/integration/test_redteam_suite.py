@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from guardrail_gateway.config import Settings
+from guardrail_gateway.redteam.credentials import build_credentials
 from guardrail_gateway.redteam.models import Expectation
 from guardrail_gateway.redteam.runner import Baseline, evaluate_gate, run_suite
 from guardrail_gateway.redteam.scenarios import ALL_SCENARIOS
@@ -33,8 +35,10 @@ class InProcessClient:
 
 
 @pytest.fixture
-def suite_run(client: TestClient) -> Any:
-    return run_suite(InProcessClient(client), "in-process", "test-policy")
+def suite_run(client: TestClient, settings: Settings) -> Any:
+    return run_suite(
+        InProcessClient(client), "in-process", "test-policy", build_credentials(settings)
+    )
 
 
 @pytest.mark.integration
@@ -84,6 +88,7 @@ def test_every_specification_attack_category_is_covered(suite_run: Any) -> None:
         "approval_manipulation",
         "resource_exhaustion",
         "mcp_poisoning",
+        "identity_spoofing",
     }
 
     covered = {r.category for r in suite_run.results}

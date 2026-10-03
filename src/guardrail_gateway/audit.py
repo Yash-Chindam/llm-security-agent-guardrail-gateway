@@ -30,6 +30,24 @@ class AuditSink:
         with self._lock:
             self._events.append(event)
 
+    def publish_rejection(self, reason_code: str, path: str) -> None:
+        """Record a credential refusal, which has no decision to attribute it to.
+
+        Section 17 requires complete audit attribution for every action
+        decision, so a request refused before it reaches an enforcement point
+        still leaves a trail. Only the reason code and route are kept; the
+        rejected credential is never stored.
+        """
+
+        event = {
+            "enforcement_point": "credential",
+            "verdict": "deny",
+            "reason_code": reason_code,
+            "path": path,
+        }
+        with self._lock:
+            self._events.append(event)
+
     def snapshot(self) -> list[dict[str, Any]]:
         with self._lock:
             return list(self._events)

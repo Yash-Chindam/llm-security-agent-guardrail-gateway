@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from guardrail_gateway.config import Settings
+from guardrail_gateway.redteam.credentials import build_credentials
 from guardrail_gateway.redteam.models import Expectation, RedTeamRun
 from guardrail_gateway.redteam.runner import Baseline, evaluate_gate, run_suite
 
@@ -73,9 +75,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-false-positive-rate", type=float, default=0.0)
     args = parser.parse_args(argv)
 
+    # The suite authenticates like any other caller. Signing material comes from
+    # the environment (GUARDRAIL_JWT_SECRET and friends), the same configuration
+    # the target gateway was started with.
+    settings = Settings()
+    if settings.jwt_secret is None:
+        print(
+            "No signing material configured. Set GUARDRAIL_JWT_SECRET to the value the "
+            "target gateway verifies, so the suite can authenticate as a real caller.",
+            file=sys.stderr,
+        )
+        return 2
+    credentials = build_credentials(settings)
+
     client = HttpGatewayClient(args.target)
     try:
-        run = run_suite(client, args.target, client.policy_version())
+        run = run_suite(client, args.target, client.policy_version(), credentials)
     finally:
         client.close()
 

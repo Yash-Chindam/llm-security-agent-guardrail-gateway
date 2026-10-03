@@ -6,10 +6,18 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
 from guardrail_gateway.approvals import ApprovalStore
 from guardrail_gateway.audit import AuditSink
 from guardrail_gateway.config import Settings, get_settings
+from guardrail_gateway.identity import (
+    AuthenticationFailure,
+    CredentialError,
+    IdentityVerifier,
+    Principal,
+    Role,
+)
 from guardrail_gateway.models import (
     ActionInspectionRequest,
     ApprovalDecisionRequest,
@@ -29,7 +37,35 @@ def get_gateway_service(request: Request) -> GatewayService:
     return request.app.state.gateway_service  # type: ignore[no-any-return]
 
 
+def authenticated_principal(
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+) -> Principal:
+    """Verify the caller's credential before any enforcement logic runs."""
+
+    verifier: IdentityVerifier = request.app.state.identity_verifier
+    service: GatewayService = request.app.state.gateway_service
+    try:
+        return verifier.verify(authorization)
+    except CredentialError as error:
+        service.audit.publish_rejection(error.failure.value, request.url.path)
+        # A missing verifier is the deployment's failure, not the caller's, and
+        # section 15 requires that condition to be deterministic rather than
+        # degrading into unauthenticated access.
+        code = (
+            status.HTTP_503_SERVICE_UNAVAILABLE
+            if error.failure is AuthenticationFailure.UNAVAILABLE
+            else status.HTTP_401_UNAUTHORIZED
+        )
+        raise HTTPException(
+            status_code=code,
+            detail=error.failure.value,
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from error
+
+
 GatewayDependency = Annotated[GatewayService, Depends(get_gateway_service)]
+PrincipalDependency = Annotated[Principal, Depends(authenticated_principal)]
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -37,52 +73,81 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     approvals = ApprovalStore(runtime_settings.approval_ttl_seconds)
     audit = AuditSink(runtime_settings.audit_buffer_size)
     service = GatewayService(runtime_settings, approvals, audit)
+    verifier = IdentityVerifier(runtime_settings)
 
     application = FastAPI(
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.2.0",
+        version="0.3.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service
+    application.state.identity_verifier = verifier
 
     @application.get("/health/live", response_model=HealthResponse, tags=["health"])
     def live() -> HealthResponse:
-        return HealthResponse(status="ok", policy_version=runtime_settings.policy_version)
+        return HealthResponse(
+            status="ok",
+            policy_version=runtime_settings.policy_version,
+            identity_verification=_verification_state(verifier),
+        )
 
     @application.get("/health/ready", response_model=HealthResponse, tags=["health"])
-    def ready() -> HealthResponse:
-        return HealthResponse(status="ready", policy_version=runtime_settings.policy_version)
+    def ready() -> JSONResponse:
+        # Not ready while no credential can be verified: the gateway is running
+        # but every enforcement request will be refused, and a load balancer
+        # should see that rather than send traffic into a closed gate.
+        body = HealthResponse(
+            status="ready" if verifier.configured else "not_ready",
+            policy_version=runtime_settings.policy_version,
+            identity_verification=_verification_state(verifier),
+        )
+        code = status.HTTP_200_OK if verifier.configured else status.HTTP_503_SERVICE_UNAVAILABLE
+        return JSONResponse(status_code=code, content=body.model_dump())
 
     @application.post("/v1/inspect/input", response_model=SecurityDecision, tags=["inspection"])
     def inspect_input(
-        request: ContentInspectionRequest, gateway: GatewayDependency
+        request: ContentInspectionRequest,
+        gateway: GatewayDependency,
+        principal: PrincipalDependency,
     ) -> SecurityDecision:
-        return gateway.inspect_content(request, EnforcementPoint.INPUT)
+        return gateway.inspect_content(request, EnforcementPoint.INPUT, principal)
 
     @application.post("/v1/inspect/context", response_model=SecurityDecision, tags=["inspection"])
     def inspect_context(
-        request: ContentInspectionRequest, gateway: GatewayDependency
+        request: ContentInspectionRequest,
+        gateway: GatewayDependency,
+        principal: PrincipalDependency,
     ) -> SecurityDecision:
-        return gateway.inspect_content(request, EnforcementPoint.CONTEXT)
+        return gateway.inspect_content(request, EnforcementPoint.CONTEXT, principal)
 
     @application.post("/v1/inspect/output", response_model=SecurityDecision, tags=["inspection"])
     def inspect_output(
-        request: ContentInspectionRequest, gateway: GatewayDependency
+        request: ContentInspectionRequest,
+        gateway: GatewayDependency,
+        principal: PrincipalDependency,
     ) -> SecurityDecision:
-        return gateway.inspect_content(request, EnforcementPoint.OUTPUT)
+        return gateway.inspect_content(request, EnforcementPoint.OUTPUT, principal)
 
     @application.post("/v1/inspect/action", response_model=SecurityDecision, tags=["inspection"])
     def inspect_action(
-        request: ActionInspectionRequest, gateway: GatewayDependency
+        request: ActionInspectionRequest,
+        gateway: GatewayDependency,
+        principal: PrincipalDependency,
     ) -> SecurityDecision:
-        return gateway.inspect_action(request)
+        return gateway.inspect_action(request, principal)
 
     @application.get(
         "/v1/approvals/{approval_id}", response_model=ApprovalRecord, tags=["approval"]
     )
-    def get_approval(approval_id: UUID, gateway: GatewayDependency) -> ApprovalRecord:
+    def get_approval(
+        approval_id: UUID,
+        gateway: GatewayDependency,
+        principal: PrincipalDependency,
+    ) -> ApprovalRecord:
         record = gateway.approvals.get(approval_id)
-        if record is None:
+        # Another tenant's approval is reported as missing rather than
+        # forbidden, so the endpoint cannot be used to confirm it exists.
+        if record is None or record.tenant_id != principal.tenant_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Approval not found")
         return record
 
@@ -95,24 +160,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         approval_id: UUID,
         decision: ApprovalDecisionRequest,
         gateway: GatewayDependency,
-        reviewer_id: Annotated[str | None, Header(alias="X-Reviewer-Id")] = None,
+        principal: PrincipalDependency,
     ) -> ApprovalRecord:
-        if not reviewer_id:
+        if not principal.has_role(Role.REVIEWER):
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Authenticated reviewer identity required",
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="reviewer_role_required",
             )
-        record = gateway.approvals.approve(approval_id, reviewer_id, decision.rationale)
-        if record is None:
+
+        record = gateway.approvals.get(approval_id)
+        if record is None or record.tenant_id != principal.tenant_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Approval not found")
-        if record.status is not ApprovalStatus.APPROVED:
+
+        # Separation of duties: the identity that proposed the action cannot be
+        # the identity that adjudicates it, whatever roles it holds.
+        if record.requested_by == principal.identity:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Approval is {record.status.value}",
+                detail="self_approval_forbidden",
             )
-        return record
+
+        approved = gateway.approvals.approve(approval_id, principal.identity, decision.rationale)
+        if approved is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Approval not found")
+        if approved.status is not ApprovalStatus.APPROVED:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Approval is {approved.status.value}",
+            )
+        return approved
 
     return application
+
+
+def _verification_state(verifier: IdentityVerifier) -> str:
+    return "configured" if verifier.configured else "unavailable"
 
 
 app = create_app()

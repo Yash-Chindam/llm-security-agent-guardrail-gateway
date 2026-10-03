@@ -123,3 +123,4 @@ class ApprovalDecisionRequest(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     policy_version: str
+    identity_verification: str = "configured"

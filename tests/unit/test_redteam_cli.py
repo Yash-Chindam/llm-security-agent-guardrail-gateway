@@ -20,6 +20,15 @@ from guardrail_gateway.redteam.runner import Baseline
 
 pytestmark = pytest.mark.unit
 
+SIGNING_KEY = "cli-test-signing-key-0123456789abcdef"
+
+
+@pytest.fixture(autouse=True)
+def _signing_material(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI authenticates as a real caller, so it needs signing material."""
+
+    monkeypatch.setenv("GUARDRAIL_JWT_SECRET", SIGNING_KEY)
+
 
 def _result(scenario_id: str, expectation: Expectation, observed: Expectation) -> ScenarioResult:
     return ScenarioResult(
@@ -166,6 +175,18 @@ def test_report_flag_writes_run_json(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     saved = json.loads(report_path.read_text(encoding="utf-8"))
     assert saved["target"] == "http://testserver"
+
+
+def test_the_cli_refuses_to_run_without_signing_material(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GUARDRAIL_JWT_SECRET", raising=False)
+    monkeypatch.setattr(cli, "HttpGatewayClient", FakeGatewayClient)
+
+    exit_code = cli.main(["--target", "http://testserver"])
+
+    assert exit_code == 2
+    assert "GUARDRAIL_JWT_SECRET" in capsys.readouterr().err
 
 
 def _patch_transport(monkeypatch: pytest.MonkeyPatch, transport: httpx.BaseTransport) -> None:
