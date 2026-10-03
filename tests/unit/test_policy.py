@@ -1,4 +1,5 @@
 from guardrail_gateway.detectors import DECODED_DETECTOR
+from guardrail_gateway.identity import Role
 from guardrail_gateway.models import (
     ActionInspectionRequest,
     DetectorEvidence,
@@ -7,6 +8,8 @@ from guardrail_gateway.models import (
     TrustLevel,
 )
 from guardrail_gateway.policy import action_digest, action_verdict, content_verdict
+
+OPERATOR = frozenset({Role.CALLER, Role.OPERATOR})
 
 
 def _evidence(detector: str, category: str) -> DetectorEvidence:
@@ -42,14 +45,16 @@ def test_action_digest_is_canonical() -> None:
 
 
 def test_denies_cross_tenant_resource() -> None:
-    verdict, reason = action_verdict(_action(resource="tenant:other:analytics"))
+    verdict, reason = action_verdict(_action(resource="tenant:other:analytics"), OPERATOR)
 
     assert verdict.value == "deny"
     assert reason == "resource_tenant_mismatch"
 
 
 def test_denies_mutating_sql_even_if_claimed_read_only() -> None:
-    verdict, reason = action_verdict(_action(arguments={"query": "SELECT 1; DROP TABLE customers"}))
+    verdict, reason = action_verdict(
+        _action(arguments={"query": "SELECT 1; DROP TABLE customers"}), OPERATOR
+    )
 
     assert verdict.value == "deny"
     assert reason == "sql_not_read_only"

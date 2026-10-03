@@ -13,6 +13,7 @@ from guardrail_gateway.app import create_app
 from guardrail_gateway.audit import TransportUnavailableError
 from guardrail_gateway.config import Settings
 from guardrail_gateway.detectors import DetectorUnavailableError, DeterministicInspector
+from guardrail_gateway.identity import Role
 from guardrail_gateway.models import (
     ActionInspectionRequest,
     DetectorEvidence,
@@ -54,7 +55,9 @@ class UnreachablePolicyEngine:
     ) -> tuple[Verdict, str]:
         raise PolicyEngineUnavailableError
 
-    def action_verdict(self, request: ActionInspectionRequest) -> tuple[Verdict, str]:
+    def action_verdict(
+        self, request: ActionInspectionRequest, roles: frozenset[Role]
+    ) -> tuple[Verdict, str]:
         raise PolicyEngineUnavailableError
 
 

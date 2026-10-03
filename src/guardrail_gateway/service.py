@@ -54,9 +54,9 @@ class GatewayService:
         self.settings = settings
         self.approvals = approvals
         self.audit = audit
-        self.policy: PolicyEngine = policy or LocalPolicyEngine()
+        self.policy: PolicyEngine = policy or LocalPolicyEngine(settings)
         self.inspectors: tuple[ContentInspector, ...] = inspectors or (DeterministicInspector(),)
-        self._restricted_policy = LocalPolicyEngine()
+        self._restricted_policy = LocalPolicyEngine(settings)
 
     def inspect_content(
         self,
@@ -151,7 +151,7 @@ class GatewayService:
 
         digest = action_digest(request)
         try:
-            verdict, reason = self.policy.action_verdict(request)
+            verdict, reason = self.policy.action_verdict(request, principal.roles)
         except PolicyEngineUnavailableError:
             # A side effect is never authorized by a fallback: without the
             # policy decision point it fails closed, whatever mode is enabled.
@@ -161,7 +161,7 @@ class GatewayService:
             )
             if not restricted:
                 return decide(Verdict.DENY, "policy_engine_unavailable", digest)
-            verdict, reason = self._restricted_policy.action_verdict(request)
+            verdict, reason = self._restricted_policy.action_verdict(request, principal.roles)
             if verdict is not Verdict.ALLOW:
                 return decide(Verdict.DENY, reason, digest)
             reason = "restricted_read_only_mode"

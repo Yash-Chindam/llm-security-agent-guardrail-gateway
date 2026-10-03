@@ -130,11 +130,15 @@ test("stops a requester from approving their own action", async ({ request }) =>
     arguments: { record_id: "41" },
     side_effect: "destructive",
   };
-  const selfCaller = authHeader({ identity: "e2e-self", tenant: "acme" });
+  const selfCaller = authHeader({
+    identity: "e2e-self",
+    tenant: "acme",
+    roles: ["caller", "operator"],
+  });
   const selfReviewer = authHeader({
     identity: "e2e-self",
     tenant: "acme",
-    roles: ["caller", "reviewer"],
+    roles: ["caller", "operator", "reviewer"],
   });
 
   const challengeResponse = await request.post("/v1/inspect/action", {

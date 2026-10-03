@@ -25,11 +25,11 @@ covered by tests, and a partial row names what is missing.
 | §8.1 before the model | partial | Identity, tenant, injection, PII/secret, and size are enforced. Quota, model eligibility, and known-violation history are planned (M5). |
 | §8.2 retrieved context | partial | Source/tenant labels, trust class, embedded instructions, and size are enforced. Per-document authorization is planned (M7). |
 | §8.3 after the model | partial | PII and secret leakage are enforced. Structured-output schema, grounding/citation, embedded proposed actions, and abstention rules are planned (M6). |
-| §8.4 before a tool action | partial | Allowlist, side-effect class, tenant/resource, SQL read-only, argument shape, and approval are enforced. Role authorization, filesystem/URL/shell policy, and execution budgets are planned (M5). |
+| §8.4 before a tool action | partial | Allowlist, role authorization, side-effect class, tenant/resource, argument schema, SQL/filesystem/URL policy, and approval are enforced. Execution budgets are planned (M5b). |
 | §9 policy model | done | Every decision carries point, identity, tenant, policy version, verdict, reason code, evidence, digest, and latency. |
 | §10 content inspection | partial | Deterministic detectors with redacted evidence and base64 de-obfuscation. Presidio, reversible pseudonymization, canary leakage measurement, and wider encoding normalization are planned (M8). |
-| §11 action broker and sandbox | partial | Allowlist, tenant checks, digest-bound approval. Per-tool Pydantic schemas, a real SQL parser, path/URL canonicalization, and the execution sandbox are planned (M5, M10). |
-| §12 red-team design | done | 31 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
+| §11 action broker and sandbox | partial | Allowlist, strict per-tool Pydantic schemas, parsed SQL restricted to read-only queries, canonical paths and URLs, tenant checks, digest-bound approval. The execution sandbox is planned (M10). |
+| §12 red-team design | done | 41 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
 | §13 information model | partial | SecurityDecision, DetectorEvidence, ActionRequest, ApprovalRecord, and RedTeamRun exist. IncidentCase is planned (M9). |
 | §14 events and analytics | partial | Structured, redacted decision events delivered through a transport port with ordered, bounded buffering. Kafka, ClickHouse, PostgreSQL, and Grafana adapters are planned (M9). |
 | §15 fail-safe behaviour | done | Policy engine, detectors, and audit transport sit behind ports with a fixed outcome when each is lost: fail closed for side effects, optional restricted read-only mode, bounded audit buffering, and blocking when mandatory audit durability is lost. |
@@ -56,13 +56,16 @@ Delivered:
   engine, detectors, and audit transport, with the section 15 outcome for each
   failure and an audit state on the readiness probe.
 
+- **M5a action-broker hardening** (`v0.5.0`) — role-to-tool authorization,
+  strict per-tool argument schemas, parsed SQL, and canonical path and URL
+  policy.
+
 Planned, in the order the specification's risk ordering implies:
 
 - **M3b identity provider integration** — OIDC discovery and JWKS rotation,
   asymmetric verification against a live issuer.
-- **M5 authorization, quotas, and action-broker hardening (§8.4, §11)** —
-  role-to-tool permissions, per-identity and per-tenant budgets, per-tool
-  Pydantic schemas, SQL parsing, path and URL canonicalization.
+- **M5b quotas and execution budgets (§8.1, §8.4)** — per-identity and
+  per-tenant rate limits and a per-trace action budget.
 - **M6 output enforcement (§8.3)** — structured-output schema validation,
   grounding and citation requirements, proposed actions embedded in prose.
 - **M7 context authorization (§8.2)** — per-document identity-bound filters.

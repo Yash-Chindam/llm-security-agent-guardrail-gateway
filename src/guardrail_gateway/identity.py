@@ -34,6 +34,8 @@ class Role(StrEnum):
     """Authorization roles read from the token's ``roles`` claim."""
 
     CALLER = "caller"
+    # May propose tools that have a side effect, subject to approval.
+    OPERATOR = "operator"
     REVIEWER = "reviewer"
 
 

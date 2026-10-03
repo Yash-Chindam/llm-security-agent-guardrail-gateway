@@ -201,7 +201,9 @@ def test_a_requester_cannot_approve_their_own_action(
     challenge = client.post("/v1/inspect/action", headers=caller_auth, json=ACTION)
     approval_id = challenge.json()["approval_id"]
     # The requester also holds the reviewer role, which must still not be enough.
-    self_reviewer = issue_token(settings, "user-1", "acme", roles=(Role.CALLER, Role.REVIEWER))
+    self_reviewer = issue_token(
+        settings, "user-1", "acme", roles=(Role.CALLER, Role.OPERATOR, Role.REVIEWER)
+    )
 
     response = client.post(
         f"/v1/approvals/{approval_id}/approve",

@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # built-in local policy instead of refusing them too.
     restricted_read_only_mode: bool = False
 
+    # Section 11. Hosts an agent may fetch from, as a JSON list; empty permits
+    # no outbound request. File tools are confined to one directory tree.
+    allowed_url_hosts: tuple[str, ...] = ()
+    file_root: str = Field(default="workspace", pattern=r"^[A-Za-z0-9_-]+$")
+
     # Signing material for caller credentials. There is deliberately no
     # "authentication disabled" switch: when this is unset the gateway cannot
     # prove who is calling, so it refuses every enforcement request instead of

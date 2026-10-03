@@ -33,12 +33,15 @@ def build_credentials(settings: Settings) -> CredentialSet:
     forging_settings = settings.model_copy(update={"jwt_secret": SecretStr(_WRONG_KEY)})
 
     return CredentialSet(
-        caller=issue_token(settings, IDENTITY, TENANT),
+        caller=issue_token(settings, IDENTITY, TENANT, roles=(Role.CALLER, Role.OPERATOR)),
+        read_only=issue_token(settings, IDENTITY, TENANT, roles=(Role.CALLER,)),
         reviewer=issue_token(
             settings, REVIEWER_IDENTITY, TENANT, roles=(Role.CALLER, Role.REVIEWER)
         ),
         # The caller itself holding the reviewer role, to attack separation of duties.
-        self_reviewer=issue_token(settings, IDENTITY, TENANT, roles=(Role.CALLER, Role.REVIEWER)),
+        self_reviewer=issue_token(
+            settings, IDENTITY, TENANT, roles=(Role.CALLER, Role.OPERATOR, Role.REVIEWER)
+        ),
         foreign_tenant=issue_token(
             settings, "intruder@contoso", FOREIGN_TENANT, roles=(Role.CALLER, Role.REVIEWER)
         ),
