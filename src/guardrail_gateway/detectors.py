@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import base64
 import re
-from binascii import Error as BinasciiError
 from dataclasses import dataclass
 from typing import Protocol
 
 from guardrail_gateway.models import DetectorEvidence
+from guardrail_gateway.normalize import alternative_readings
 from guardrail_gateway.tools import TOOLS
 
 # Evidence recovered from decoded content has no location in the original text,
@@ -108,67 +107,87 @@ _RULES: tuple[MatchRule, ...] = (
     ),
 )
 
-_REDACTIONS = {
-    "secret": "[REDACTED_SECRET]",  # nosec B105
-    "pii_email": "[REDACTED_EMAIL]",
-    "pii_phone": "[REDACTED_PHONE]",
-}
+_CONTEXT = 18
+_DECODED_NOTE = " Found only after decoding embedded content."
 
 
-def _excerpt(content: str, match: re.Match[str]) -> str:
-    start = max(0, match.start() - 18)
-    end = min(len(content), match.end() + 18)
-    prefix = "…" if start else ""
-    suffix = "…" if end < len(content) else ""
-    return f"{prefix}{content[start : match.start()]}[MATCH]{content[match.end() : end]}{suffix}"
+@dataclass(frozen=True, slots=True)
+class Finding:
+    """Evidence, with where in the content it was found when that is known.
+
+    The location never leaves the gateway: it is what lets a sensitive value
+    be replaced in place, while the evidence itself carries no matched text.
+    """
+
+    evidence: DetectorEvidence
+    start: int | None = None
+    end: int | None = None
 
 
-_BASE64_RUN = re.compile(r"[A-Za-z0-9+/]{20,}={0,2}")
+def _excerpt(content: str, start: int, end: int) -> str:
+    left = max(0, start - _CONTEXT)
+    right = min(len(content), end + _CONTEXT)
+    prefix = "…" if left else ""
+    suffix = "…" if right < len(content) else ""
+    return f"{prefix}{content[left:start]}[MATCH]{content[end:right]}{suffix}"
 
 
-def _decoded_candidates(content: str) -> list[str]:
-    """Decode base64-looking runs so obfuscated instructions are still inspected."""
-
-    candidates: list[str] = []
-    for match in _BASE64_RUN.finditer(content):
-        blob = match.group().rstrip("=")
-        try:
-            raw = base64.b64decode(blob + "=" * (-len(blob) % 4), validate=True)
-            text = raw.decode("utf-8")
-        except (BinasciiError, UnicodeDecodeError):
-            continue
-        if text and sum(character.isprintable() for character in text) / len(text) > 0.8:
-            candidates.append(text)
-    return candidates
-
-
-def _scan(content: str, detector: str, suffix: str) -> list[DetectorEvidence]:
-    evidence: list[DetectorEvidence] = []
+def _scan(content: str) -> list[Finding]:
+    findings: list[Finding] = []
     for rule in _RULES:
         for match in rule.pattern.finditer(content):
-            evidence.append(
-                DetectorEvidence(
-                    detector=detector,
-                    version="1.1.0",
-                    category=rule.category,
-                    score=rule.score,
-                    threshold=0.8,
-                    redacted_excerpt=_excerpt(content, match),
-                    explanation=rule.explanation + suffix,
+            findings.append(
+                Finding(
+                    DetectorEvidence(
+                        detector="deterministic_content",
+                        version="1.2.0",
+                        category=rule.category,
+                        score=rule.score,
+                        threshold=0.8,
+                        redacted_excerpt=_excerpt(content, match.start(), match.end()),
+                        explanation=rule.explanation,
+                    ),
+                    match.start(),
+                    match.end(),
                 )
             )
-    return evidence
+    return findings
+
+
+def _as_decoded(finding: Finding) -> Finding:
+    """Re-label a finding from an alternative reading, which has no location."""
+
+    evidence = finding.evidence.model_copy(
+        update={
+            "detector": DECODED_DETECTOR,
+            "explanation": finding.evidence.explanation + _DECODED_NOTE,
+        }
+    )
+    return Finding(evidence)
+
+
+def inspect_findings(content: str) -> list[Finding]:
+    """Inspect the content and every reading an encoding could be hiding."""
+
+    findings = _scan(content)
+    plain = {finding.evidence.category for finding in findings}
+    hidden: set[str] = set()
+    for reading in alternative_readings(content):
+        for finding in _scan(reading):
+            category = finding.evidence.category
+            # A category already visible in the original is the same value seen
+            # again through a reading, not something that was concealed.
+            if category in plain or category in hidden:
+                continue
+            hidden.add(category)
+            findings.append(_as_decoded(finding))
+    return findings
 
 
 def inspect_content(content: str) -> list[DetectorEvidence]:
     """Return redacted evidence without retaining the matched sensitive value."""
 
-    evidence = _scan(content, "deterministic_content", "")
-    for decoded in _decoded_candidates(content):
-        evidence.extend(
-            _scan(decoded, DECODED_DETECTOR, " Found only after decoding embedded content.")
-        )
-    return evidence
+    return [finding.evidence for finding in inspect_findings(content)]
 
 
 class DetectorUnavailableError(Exception):
@@ -178,23 +197,58 @@ class DetectorUnavailableError(Exception):
 class ContentInspector(Protocol):
     """A source of detector evidence; replaceable by Presidio or a classifier."""
 
-    def inspect(self, content: str) -> list[DetectorEvidence]:
-        """Return evidence or raise DetectorUnavailableError."""
+    def inspect(self, content: str) -> list[Finding]:
+        """Return findings or raise DetectorUnavailableError."""
 
 
 class DeterministicInspector:
     """The built-in local detector, which has no external dependency to lose."""
 
-    def inspect(self, content: str) -> list[DetectorEvidence]:
-        return inspect_content(content)
+    def inspect(self, content: str) -> list[Finding]:
+        return inspect_findings(content)
 
 
-def redact_sensitive_content(content: str) -> str:
-    """Replace locally detected sensitive values with typed placeholders."""
+class CanaryInspector:
+    """Reports any sighting of a seeded canary secret.
 
-    redacted = content
-    for rule in _RULES:
-        replacement = _REDACTIONS.get(rule.category)
-        if replacement:
-            redacted = rule.pattern.sub(replacement, redacted)
-    return redacted
+    A canary is a value planted where only a leak could surface it, so it has
+    no legitimate reason to cross any boundary. Finding one measures leakage
+    directly, which section 10 asks for and no pattern can do.
+    """
+
+    def __init__(self, canaries: tuple[str, ...]) -> None:
+        self._canaries = canaries
+
+    def inspect(self, content: str) -> list[Finding]:
+        findings = [
+            Finding(self._evidence(_excerpt(content, at, at + len(canary))), at, at + len(canary))
+            for canary in self._canaries
+            for at in _occurrences(content, canary)
+        ]
+        if findings:
+            return findings
+        for reading in alternative_readings(content):
+            if any(canary in reading for canary in self._canaries):
+                return [Finding(self._evidence("[MATCH]", _DECODED_NOTE))]
+        return []
+
+    @staticmethod
+    def _evidence(excerpt: str, note: str = "") -> DetectorEvidence:
+        return DetectorEvidence(
+            detector="canary",
+            version="1.0.0",
+            category="canary",
+            score=1.0,
+            threshold=1.0,
+            redacted_excerpt=excerpt,
+            explanation="A seeded canary secret was observed." + note,
+        )
+
+
+def _occurrences(content: str, value: str) -> list[int]:
+    positions: list[int] = []
+    at = content.find(value)
+    while at != -1:
+        positions.append(at)
+        at = content.find(value, at + len(value))
+    return positions

@@ -97,6 +97,49 @@ argument schema, tool-specific policy, then approval for any side effect.
   literals and embedded credentials are refused, which closes the usual routes
   to loopback, private ranges, and cloud metadata endpoints.
 
+## Content inspection
+
+Detectors produce evidence; policy decides. Evidence carries a category, a
+score, and an excerpt with the match replaced by `[MATCH]`, never the value.
+
+**Obfuscation.** A pattern only sees the characters it is given, so every
+content request is also inspected under each reading an encoding could hide:
+base64 and URL-safe base64, hexadecimal and `\x` escapes, percent-encoding,
+ROT13, letter-spacing, and Unicode tricks (compatibility forms, zero-width and
+bidirectional controls, look-alike letters from other scripts), with one more
+pass for doubly wrapped payloads. Something found only in such a reading has no
+position in the original text and cannot be redacted, so it is denied with
+`obfuscated_content_detected`.
+
+**Entity rules.** Each sensitive category is allowed, redacted, pseudonymized,
+or denied, for the deployment and per tenant:
+
+```bash
+GUARDRAIL_SENSITIVE_ENTITY_ACTIONS='{"pii_email": "pseudonymize"}'
+GUARDRAIL_TENANT_ENTITY_ACTIONS='{"acme": {"pii_phone": "deny"}}'
+```
+
+An unlisted category is redacted. A secret may only be redacted or denied; it
+is never allowed through or stored reversibly. Sensitive content in model
+output is denied whatever the rule.
+
+**Pseudonymization.** A pseudonymized value becomes a token such as
+`[EMAIL_1]`, stable within a trace, so the model can still tell two people
+apart. The mapping lives in a separate vault, never in a decision or an audit
+event, and expires after `GUARDRAIL_PSEUDONYM_TTL_SECONDS`.
+`POST /v1/pseudonyms/restore` turns a trace's tokens back into values for the
+tenant that owns them; another tenant or another trace resolves nothing, and
+each restoration is audited with a count and no values.
+
+**Canaries.** `GUARDRAIL_CANARY_SECRETS` seeds values that have no legitimate
+reason to cross any boundary. A sighting at any enforcement point, encoded or
+not, is denied with `canary_leak_detected`, which measures leakage directly.
+
+**Presidio.** Setting `GUARDRAIL_PRESIDIO_URL` adds a Presidio analyzer as a
+second detector, and what it recognizes is redacted in place by span. It must
+run inside the trusted boundary: content is sent to it for inspection. If it
+does not return a usable answer the content is denied, not passed.
+
 ## Retrieved context
 
 `POST /v1/inspect/context/batch` takes every document a retrieval step wants to

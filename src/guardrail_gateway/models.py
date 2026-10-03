@@ -41,6 +41,15 @@ class Classification(StrEnum):
         return list(Classification).index(self)
 
 
+class EntityAction(StrEnum):
+    """What is done with a sensitive value of a given category."""
+
+    ALLOW = "allow"
+    REDACT = "redact"
+    PSEUDONYMIZE = "pseudonymize"
+    DENY = "deny"
+
+
 class SideEffect(StrEnum):
     NONE = "none"
     READ = "read"
@@ -189,6 +198,25 @@ class ContextBatchDecision(BaseModel):
     documents: list[DocumentDecision] = Field(default_factory=list)
     admitted: int = Field(ge=0)
     latency_ms: float = Field(ge=0)
+
+
+class PseudonymRestoreRequest(BaseModel):
+    """Content whose pseudonyms should be turned back into their values."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    identity: str = Field(min_length=1, max_length=200)
+    tenant_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
+    # The trace the pseudonyms were issued under; another trace's are unknown.
+    trace_id: UUID
+    content: str = Field(min_length=1, max_length=1_000_000)
+
+
+class PseudonymRestoreResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str
+    restored: int = Field(ge=0)
 
 
 class ApprovalStatus(StrEnum):
