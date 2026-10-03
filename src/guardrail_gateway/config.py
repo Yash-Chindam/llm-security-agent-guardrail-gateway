@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     policy_version: str = "2026-08-29.1"
     approval_ttl_seconds: int = Field(default=300, ge=30, le=3600)
     max_content_chars: int = Field(default=20_000, ge=100, le=1_000_000)
+    # Section 8.2. The most retrieved text one batch may place before the model.
+    max_context_chars: int = Field(default=60_000, ge=100, le=10_000_000)
     audit_buffer_size: int = Field(default=1_000, ge=10, le=100_000)
 
     # Section 15. When audit is mandatory, enforcement blocks once the outage

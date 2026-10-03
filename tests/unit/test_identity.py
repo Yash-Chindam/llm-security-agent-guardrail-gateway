@@ -223,3 +223,15 @@ def test_a_weak_shared_secret_is_a_configuration_error() -> None:
 
     # An asymmetric key is validated by the signing library, not by length here.
     assert Settings(jwt_secret="short-but-rsa", jwt_algorithm="RS256").jwt_secret is not None
+
+
+def test_clearance_defaults_to_internal_and_is_read_from_the_credential() -> None:
+    from guardrail_gateway.models import Classification
+
+    settings = _settings()
+    default = issue_token(settings, "user-1", "acme")
+    cleared = issue_token(settings, "user-1", "acme", clearance=Classification.RESTRICTED)
+    verifier = IdentityVerifier(settings)
+
+    assert verifier.verify(_bearer(default)).clearance is Classification.INTERNAL
+    assert verifier.verify(_bearer(cleared)).clearance is Classification.RESTRICTED

@@ -21,6 +21,7 @@ from typing import Any
 import jwt
 
 from guardrail_gateway.config import Settings
+from guardrail_gateway.models import Classification
 
 _BEARER_PREFIX = "bearer "
 
@@ -64,6 +65,8 @@ class Principal:
     identity: str
     tenant_id: str
     roles: frozenset[Role]
+    # The most sensitive classification this caller may read.
+    clearance: Classification = Classification.INTERNAL
 
     def has_role(self, role: Role) -> bool:
         return role in self.roles
@@ -142,7 +145,14 @@ def _principal_from(claims: dict[str, Any]) -> Principal:
     # Unknown role names are dropped rather than rejected, so an identity
     # provider can carry roles this gateway does not use.
     roles = frozenset(Role(value) for value in values if value in set(Role))
-    return Principal(identity=subject, tenant_id=tenant, roles=roles)
+    claimed_clearance = claims.get("clearance", Classification.INTERNAL.value)
+    # An unrecognised clearance grants the least, never a default above it.
+    clearance = (
+        Classification(claimed_clearance)
+        if claimed_clearance in set(Classification)
+        else Classification.PUBLIC
+    )
+    return Principal(identity=subject, tenant_id=tenant, roles=roles, clearance=clearance)
 
 
 def issue_token(
@@ -152,6 +162,7 @@ def issue_token(
     roles: tuple[Role, ...] = (Role.CALLER,),
     lifetime_seconds: int = 300,
     issued_at: datetime | None = None,
+    clearance: Classification = Classification.INTERNAL,
 ) -> str:
     """Mint a credential for the adversarial suite and local development.
 
@@ -170,6 +181,7 @@ def issue_token(
         "sub": identity,
         "tenant": tenant_id,
         "roles": [role.value for role in roles],
+        "clearance": clearance.value,
         "iat": now,
         "exp": now + timedelta(seconds=lifetime_seconds),
     }
