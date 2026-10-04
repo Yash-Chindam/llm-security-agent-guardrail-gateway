@@ -101,6 +101,24 @@ jobs:
           exit 1
       - run: pytest tests/integration/test_opa_policy.py --no-cov
 
+  # The sandbox's isolation is a property of the container runtime, so it is
+  # tested with real containers: code that tries to reach the network, write
+  # to the filesystem, exhaust memory or processes, or run forever.
+  sandbox:
+    name: sandbox
+    runs-on: ubuntu-latest
+    env:
+      GUARDRAIL_TEST_SANDBOX_IMAGE: python:3.13-alpine
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: docker pull "$GUARDRAIL_TEST_SANDBOX_IMAGE"
+      - run: pytest tests/integration/test_sandbox_isolation.py --no-cov
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest
@@ -182,7 +200,7 @@ jobs:
 
   release-bundle:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [unit, integration, postgres, opa, coverage, e2e, security, container]
+    needs: [unit, integration, postgres, opa, sandbox, coverage, e2e, security, container]
     uses: ./.github/workflows/release-bundle.yml
     with:
       ref: ${{ github.sha }}

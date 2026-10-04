@@ -29,8 +29,8 @@ covered by tests, and a partial row names what is missing.
 | §7 technology selection | partial | FastAPI, OPA, Presidio, Kafka, ClickHouse, PostgreSQL, and Trivy are in use. The adversarial suite is the project's own, not PyRIT. NeMo Guardrails, Guardrails AI, Falco, and a Kong or Envoy edge are not implemented. |
 | §9 policy model | done | Every decision carries point, identity, tenant, policy version, verdict, reason code, evidence, digest, and latency. The decision point is the built-in policy or an OPA server with a Rego bundle that CI proves equivalent. |
 | §10 content inspection | partial | Deterministic detectors with redacted evidence; normalization of base64, hex, percent-encoding, ROT13, letter-spacing, and Unicode tricks; per-tenant allow/redact/pseudonymize/deny rules; a separate pseudonym vault; canary secrets; a fail-closed Presidio adapter. A learned injection classifier and NeMo/Guardrails AI rails are not implemented. |
-| §11 action broker and sandbox | partial | Allowlist, strict per-tool Pydantic schemas, parsed SQL restricted to read-only queries, canonical paths and URLs, tenant checks, digest-bound approval. The execution sandbox is planned (M10). |
-| §12 red-team design | done | 70 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
+| §11 action broker and sandbox | done | Allowlist, strict per-tool Pydantic schemas, parsed SQL restricted to read-only queries, canonical paths and URLs, tenant checks, digest-bound approval, and an ephemeral container sandbox for code with no network, no host filesystem, and CPU, memory, process, output, and time limits, tested against real containers in CI. The sandbox uses an ordinary container runtime unless a stronger OCI runtime is configured. |
+| §12 red-team design | done | 74 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
 | §13 information model | done | SecurityDecision, DetectorEvidence, ActionRequest, ApprovalRecord, RedTeamRun, and IncidentCase exist. Approvals and incidents can be kept in PostgreSQL or SQLite; the decision log is in memory. |
 | §14 events and analytics | done | Structured, redacted decision events delivered through a transport port with ordered, bounded buffering, and a tenant-scoped decision log for auditors. A Kafka transport (verified by hand against a real broker; CI uses a stand-in), a ClickHouse schema, a Grafana dashboard, and Prometheus alert rules, each checked against what the gateway emits. Approvals and incidents are stored in PostgreSQL, with exactly-once approval use enforced by the database and tested against a real PostgreSQL in CI. Configuration is not stored in PostgreSQL: it comes from the environment. |
 | §15 fail-safe behaviour | done | Policy engine, detectors, and audit transport sit behind ports with a fixed outcome when each is lost: fail closed for side effects, optional restricted read-only mode, bounded audit buffering, and blocking when mandatory audit durability is lost. |
@@ -93,9 +93,12 @@ Delivered:
   bundle, its own tests, and a CI check that it decides exactly as the
   built-in policy does.
 
+- **M10b execution sandbox** (`v0.14.0`) — `run_code` and an execute
+  endpoint that runs allowed code in a locked-down, ephemeral container.
+
 Planned, in the order the specification's risk ordering implies:
 
 - **M3b identity provider integration** — OIDC discovery and JWKS rotation,
   asymmetric verification against a live issuer.
-- **M10b sandbox and platform (§11, §16, §18)** — sandboxed execution, compose
-  and Helm topology, signed images.
+- **M10c platform (§16, §18)** — compose and Helm topology, NetworkPolicies,
+  signed images.

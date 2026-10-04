@@ -77,6 +77,12 @@ class GatewayMetrics:
             buckets=_LATENCY_BUCKETS,
             registry=self.registry,
         )
+        self._sandbox_runs = Counter(
+            "guardrail_sandbox_runs_total",
+            "Sandboxed code runs by how they ended.",
+            ["outcome"],
+            registry=self.registry,
+        )
         self._store_available = Gauge(
             "guardrail_store_available",
             "Whether the approval and incident store answered (1) or not (0).",
@@ -95,6 +101,9 @@ class GatewayMetrics:
 
     def observe_detector(self, detector: str, seconds: float) -> None:
         self._detector_latency.labels(detector).observe(seconds)
+
+    def observe_sandbox_run(self, outcome: str) -> None:
+        self._sandbox_runs.labels(outcome).inc()
 
     def observe_rejection(self, reason_code: str) -> None:
         self._rejections.labels(reason_code).inc()

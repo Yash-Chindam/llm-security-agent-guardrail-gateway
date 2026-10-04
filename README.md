@@ -281,6 +281,38 @@ unauthenticated like the health probes, so expose it to the scraper only.
 The decision log is in memory and per process. Approvals and incidents can be
 kept in a database; see [Durable approvals and incidents](#durable-approvals-and-incidents).
 
+## Sandboxed code execution
+
+The gateway decides actions; the application that asked runs them. The one
+exception is code. `run_code` is a registered tool, and
+`POST /v1/actions/execute` decides it exactly as `/v1/inspect/action` would
+and, only if the verdict is `allow`, runs it in a sandbox and returns the
+decision with the result. It is offered when `GUARDRAIL_SANDBOX_IMAGE` names an
+image that has Python.
+
+Each run is a new container, removed when it ends:
+
+| Control | How |
+|---|---|
+| No host filesystem | Nothing is mounted; the root filesystem is read-only; `/tmp` is a 16 MB in-memory scratch that cannot hold executables. |
+| No network | `--network none`. A run that asks for `network: true` must declare an `external` side effect, so it needs a reviewer's approval of that exact code. |
+| No privileges | Unprivileged user, every capability dropped, `no-new-privileges`. |
+| CPU, memory, processes | `GUARDRAIL_SANDBOX_CPUS` (0.5), `GUARDRAIL_SANDBOX_MEMORY_MB` (128, no swap), `GUARDRAIL_SANDBOX_PIDS` (32). |
+| Time and output | `GUARDRAIL_SANDBOX_TIMEOUT_SECONDS` (10) and `GUARDRAIL_SANDBOX_OUTPUT_BYTES` (65536). A run past either has its container killed. |
+
+Only Python is accepted, only the `operator` role may propose it, and the code
+is passed on standard input, never on a command line. The code and its output
+are returned to the caller and are not written to the audit trail or metrics;
+the run is recorded by its outcome and the decision's digest. When no sandbox
+can start, the request is refused with `503 sandbox_unavailable` before the
+decision is made, so an approval is never spent on code that did not run.
+
+An ordinary container shares the host kernel. For hostile code set
+`GUARDRAIL_SANDBOX_OCI_RUNTIME` to a runtime with a stronger boundary, such as
+gVisor's `runsc`. The gateway needs access to a container runtime
+(`GUARDRAIL_SANDBOX_RUNTIME`, default `docker`) to offer this, which is itself
+a privilege: run the replicas that execute code separately from the rest.
+
 ## Policy as code
 
 By default decisions are made by the built-in policy, in process. Set

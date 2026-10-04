@@ -34,6 +34,18 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str | None = Field(default=None, min_length=1)
     kafka_topic: str = Field(default="guardrail.security-events", pattern=r"^[A-Za-z0-9._-]+$")
     kafka_client_config: dict[str, str | int | bool] = Field(default_factory=dict)
+    # Section 11. Offer sandboxed code execution when an image is named. Each
+    # run is a new container with no network, no host filesystem, and these
+    # limits. The runtime is the container CLI; the OCI runtime, when set,
+    # selects a stronger isolation boundary such as gVisor's runsc.
+    sandbox_image: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._/:@-]*$")
+    sandbox_runtime: str = Field(default="docker", pattern=r"^[A-Za-z0-9._/-]+$")
+    sandbox_oci_runtime: str | None = Field(default=None, pattern=r"^[A-Za-z0-9._-]+$")
+    sandbox_cpus: float = Field(default=0.5, gt=0, le=8)
+    sandbox_memory_mb: int = Field(default=128, ge=16, le=8_192)
+    sandbox_pids: int = Field(default=32, ge=1, le=1_024)
+    sandbox_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
+    sandbox_output_bytes: int = Field(default=65_536, ge=1, le=10_000_000)
     # Section 7. Ask an Open Policy Agent server for every decision instead of
     # the built-in policy. The timeout is short: a decision is on the request
     # path, and a slow policy engine is treated as an unavailable one.

@@ -478,8 +478,8 @@
     },
     {
       "id": 14,
-      "title": "Open incidents",
-      "type": "stat",
+      "title": "Sandbox runs by outcome",
+      "type": "timeseries",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
@@ -489,6 +489,38 @@
         "w": 12,
         "x": 12,
         "y": 48
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (outcome) (rate(guardrail_sandbox_runs_total[5m]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Open incidents",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 56
       },
       "fieldConfig": {
         "defaults": {
