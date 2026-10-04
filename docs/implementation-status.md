@@ -34,7 +34,7 @@ covered by tests, and a partial row names what is missing.
 | §13 information model | done | SecurityDecision, DetectorEvidence, ActionRequest, ApprovalRecord, RedTeamRun, and IncidentCase exist. Approvals and incidents can be kept in PostgreSQL or SQLite; the decision log is in memory. |
 | §14 events and analytics | done | Structured, redacted decision events delivered through a transport port with ordered, bounded buffering, and a tenant-scoped decision log for auditors. A Kafka transport (verified by hand against a real broker; CI uses a stand-in), a ClickHouse schema, a Grafana dashboard, and Prometheus alert rules, each checked against what the gateway emits. Approvals and incidents are stored in PostgreSQL, with exactly-once approval use enforced by the database and tested against a real PostgreSQL in CI. Configuration is not stored in PostgreSQL: it comes from the environment. |
 | §15 fail-safe behaviour | done | Policy engine, detectors, and audit transport sit behind ports with a fixed outcome when each is lost: fail closed for side effects, optional restricted read-only mode, bounded audit buffering, and blocking when mandatory audit durability is lost. |
-| §16 platform security | partial | Verified bearer identity, non-root image, no build tooling in runtime, Trivy, SBOM, provenance. OIDC discovery, secret manager, NetworkPolicies, image signing, and Falco are planned (M3b, M10). |
+| §16 platform security | partial | Verified bearer identity with OIDC discovery and key rotation (tested against a stand-in provider, not a running Keycloak), non-root image, no build tooling in runtime, Trivy, SBOM, provenance. NetworkPolicies, read-only filesystems, service accounts, and image signing are planned (M10c). A secret manager and Falco are not implemented. |
 | §17 observability | done | The red-team suite reports attack-success, false-positive, and leakage rates. `/metrics` exposes decisions, policy and detector latency, approvals, audit lag and drops, and open incidents, with a dashboard and alert rules. Each decision is an OpenTelemetry span with a child span per detector. |
 | §18 deployment topology | planned | Compose and Helm topology (M10). |
 
@@ -96,9 +96,10 @@ Delivered:
 - **M10b execution sandbox** (`v0.14.0`) — `run_code` and an execute
   endpoint that runs allowed code in a locked-down, ephemeral container.
 
+- **M3b identity provider integration** (`v0.15.0`) — OIDC discovery and
+  JWKS rotation with a bounded staleness window.
+
 Planned, in the order the specification's risk ordering implies:
 
-- **M3b identity provider integration** — OIDC discovery and JWKS rotation,
-  asymmetric verification against a live issuer.
 - **M10c platform (§16, §18)** — compose and Helm topology, NetworkPolicies,
   signed images.
