@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID
 
@@ -9,7 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response
 from opentelemetry.trace import TracerProvider
 
-from guardrail_gateway.approvals import ApprovalStore
+from guardrail_gateway.approvals import ApprovalRepository, ApprovalStore
 from guardrail_gateway.audit import AuditSink, AuditTransport
 from guardrail_gateway.config import Settings, get_settings
 from guardrail_gateway.detectors import ContentInspector, DeterministicInspector
@@ -20,6 +22,7 @@ from guardrail_gateway.identity import (
     Principal,
     Role,
 )
+from guardrail_gateway.incidents import IncidentRepository
 from guardrail_gateway.kafka import KafkaTransport, producer_factory
 from guardrail_gateway.metrics import CONTENT_TYPE
 from guardrail_gateway.models import (
@@ -44,6 +47,12 @@ from guardrail_gateway.policy import PolicyEngine
 from guardrail_gateway.presidio import PresidioInspector
 from guardrail_gateway.sensitive import PseudonymVault
 from guardrail_gateway.service import GatewayService
+from guardrail_gateway.stores import (
+    SqlApprovalStore,
+    SqlIncidentStore,
+    StoreUnavailableError,
+    open_database,
+)
 from guardrail_gateway.tracing import build_provider
 
 
@@ -93,15 +102,25 @@ def create_app(
     audit_transport: AuditTransport | None = None,
     vault: PseudonymVault | None = None,
     tracer_provider: TracerProvider | None = None,
+    approvals: ApprovalRepository | None = None,
+    incidents: IncidentRepository | None = None,
 ) -> FastAPI:
     """Build the gateway; the keyword adapters replace the in-process defaults."""
 
     runtime_settings = settings or get_settings()
-    approvals = ApprovalStore(runtime_settings.approval_ttl_seconds)
+    # What to release when the application stops.
+    closing: list[Callable[[], object]] = []
+    if runtime_settings.database_url is not None:
+        database = open_database(runtime_settings.database_url.get_secret_value())
+        closing.append(database.close)
+        approvals = approvals or SqlApprovalStore(database, runtime_settings.approval_ttl_seconds)
+        incidents = incidents or SqlIncidentStore(database)
+    approvals = approvals or ApprovalStore(runtime_settings.approval_ttl_seconds)
     if audit_transport is None and runtime_settings.kafka_bootstrap_servers is not None:
-        audit_transport = KafkaTransport(
-            producer_factory(runtime_settings), runtime_settings.kafka_topic
-        )
+        kafka = KafkaTransport(producer_factory(runtime_settings), runtime_settings.kafka_topic)
+        # Flushed on shutdown, so events still queued are sent before exit.
+        closing.append(kafka.close)
+        audit_transport = kafka
     if tracer_provider is None:
         tracer_provider = build_provider(runtime_settings)
     audit = AuditSink(
@@ -126,16 +145,38 @@ def create_app(
         inspectors,
         vault=vault,
         tracer_provider=tracer_provider,
+        incidents=incidents,
     )
     verifier = IdentityVerifier(runtime_settings)
 
+    @asynccontextmanager
+    async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
+        yield
+        for release in closing:
+            release()
+
     application = FastAPI(
+        lifespan=lifespan,
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.11.0",
+        version="0.12.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service
     application.state.identity_verifier = verifier
+
+    @application.exception_handler(StoreUnavailableError)
+    def store_unavailable(_request: Request, _error: StoreUnavailableError) -> JSONResponse:
+        # Reading or adjudicating an approval or an incident needs the store.
+        # Without it the request is refused outright, never answered from a
+        # guess about what the record would have said.
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "store_unavailable"},
+        )
+
+    def stores_state() -> str:
+        reachable = approvals.available() and service.incidents.available()
+        return "available" if reachable else "unavailable"
 
     @application.get("/health/live", response_model=HealthResponse, tags=["health"])
     def live() -> HealthResponse:
@@ -159,6 +200,11 @@ def create_app(
             policy_version=runtime_settings.policy_version,
             identity_verification=_verification_state(verifier),
             audit=audit_state,
+            # Reported, but not a reason to stop serving: content inspection and
+            # actions that need no approval work without the store, and taking
+            # every replica out at once would turn a partial outage into a
+            # total one.
+            stores=stores_state(),
         )
         code = status.HTTP_200_OK if serving else status.HTTP_503_SERVICE_UNAVAILABLE
         return JSONResponse(status_code=code, content=body.model_dump())
@@ -384,7 +430,7 @@ def create_app(
             approvals.counts,
             audit.pending,
             audit.dropped,
-            service.incidents.open_count(),
+            service.incidents.open_count,
             audit.in_flight,
         )
         return Response(content=body, media_type=CONTENT_TYPE)

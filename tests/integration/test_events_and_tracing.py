@@ -47,13 +47,14 @@ class RecordingProducer:
     def __init__(self, **config: Any) -> None:
         self.config = config
         self.messages: list[tuple[str, bytes, bytes | None]] = []
+        self.flushed = False
 
     def send(self, topic: str, value: bytes, key: bytes | None) -> Acknowledged:
         self.messages.append((topic, value, key))
         return Acknowledged()
 
     def flush(self, timeout: float) -> None:
-        return None
+        self.flushed = True
 
 
 class DownInspector:
@@ -92,6 +93,8 @@ def test_configuring_kafka_publishes_decisions_to_the_topic(
 
     assert response.status_code == 200
     assert ready.json()["audit"] == "durable"
+    # Stopping the gateway flushed what the producer still held.
+    assert producers[0].flushed
     [(topic, value, key)] = producers[0].messages
     assert topic == "security.events"
     assert key == b"acme"

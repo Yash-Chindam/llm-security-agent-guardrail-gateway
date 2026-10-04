@@ -24,6 +24,7 @@ def test_health(client: TestClient) -> None:
         "policy_version": "test-policy",
         "identity_verification": "configured",
         "audit": "durable",
+        "stores": "available",
     }
 
 

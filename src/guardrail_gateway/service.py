@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from contextlib import suppress
 from functools import wraps
 from time import monotonic, perf_counter
 from typing import Concatenate, ParamSpec, TypeVar
@@ -17,7 +18,7 @@ from uuid import UUID
 
 from opentelemetry import trace
 
-from guardrail_gateway.approvals import ApprovalStore
+from guardrail_gateway.approvals import ApprovalRepository
 from guardrail_gateway.audit import AuditSink
 from guardrail_gateway.config import Settings
 from guardrail_gateway.detectors import (
@@ -28,7 +29,7 @@ from guardrail_gateway.detectors import (
     Finding,
 )
 from guardrail_gateway.identity import Principal
-from guardrail_gateway.incidents import DecisionLog, IncidentStore
+from guardrail_gateway.incidents import DecisionLog, IncidentRepository, IncidentStore
 from guardrail_gateway.limits import ExecutionBudget, RateLimiter, ViolationHistory
 from guardrail_gateway.metrics import GatewayMetrics
 from guardrail_gateway.models import (
@@ -62,6 +63,7 @@ from guardrail_gateway.sensitive import (
     action_resolver,
     transform,
 )
+from guardrail_gateway.stores import StoreUnavailableError
 from guardrail_gateway.tracing import record_decision, tracer_for
 
 _P = ParamSpec("_P")
@@ -107,13 +109,14 @@ class GatewayService:
     def __init__(
         self,
         settings: Settings,
-        approvals: ApprovalStore,
+        approvals: ApprovalRepository,
         audit: AuditSink,
         policy: PolicyEngine | None = None,
         inspectors: tuple[ContentInspector, ...] | None = None,
         clock: Callable[[], float] = monotonic,
         vault: PseudonymVault | None = None,
         tracer_provider: trace.TracerProvider | None = None,
+        incidents: IncidentRepository | None = None,
     ) -> None:
         self.settings = settings
         self._tracer = tracer_for(tracer_provider)
@@ -139,7 +142,9 @@ class GatewayService:
         self._output_policy = OutputPolicyConfig.from_settings(settings)
         self.metrics = GatewayMetrics()
         self.decisions = DecisionLog(settings.decision_log_size)
-        self.incidents = IncidentStore(settings.incident_store_size)
+        self.incidents: IncidentRepository = incidents or IncidentStore(
+            settings.incident_store_size
+        )
 
     @_traced("guardrail.inspect_content")
     def inspect_content(
@@ -434,16 +439,19 @@ class GatewayService:
 
         approval_id = None
         if verdict is Verdict.REQUIRE_APPROVAL:
-            if request.approval_token is not None and self.approvals.consume(
-                request.approval_token, digest, request.tenant_id
-            ):
-                verdict, reason = Verdict.ALLOW, "exact_action_approval_consumed"
-                approval_id = request.approval_token
-            elif request.approval_token is not None:
-                verdict, reason = Verdict.DENY, "invalid_or_expired_approval"
-            else:
-                approval = self.approvals.create(digest, request.tenant_id, request.identity)
-                approval_id = approval.approval_id
+            try:
+                if request.approval_token is None:
+                    approval = self.approvals.create(digest, request.tenant_id, request.identity)
+                    approval_id = approval.approval_id
+                elif self.approvals.consume(request.approval_token, digest, request.tenant_id):
+                    verdict, reason = Verdict.ALLOW, "exact_action_approval_consumed"
+                    approval_id = request.approval_token
+                else:
+                    verdict, reason = Verdict.DENY, "invalid_or_expired_approval"
+            except StoreUnavailableError:
+                # An approval that cannot be recorded or checked authorizes
+                # nothing, so the action is refused rather than left pending.
+                return decide(Verdict.DENY, "approval_store_unavailable", digest)
 
         return decide(verdict, reason, digest, approval_id)
 
@@ -527,7 +535,10 @@ class GatewayService:
         self.metrics.observe(decision)
         record_decision(decision)
         if decision.reason_code == "canary_leak_detected":
-            self._open_canary_incident(decision)
+            # The leak is already denied and audited. Losing the incident store
+            # must not turn that denial into an error.
+            with suppress(StoreUnavailableError):
+                self._open_canary_incident(decision)
         return decision
 
     def _open_canary_incident(self, decision: SecurityDecision) -> None:

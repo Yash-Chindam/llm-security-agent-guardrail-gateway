@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections import Counter, OrderedDict
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from threading import RLock
+from typing import Protocol
 from uuid import UUID
 
 from guardrail_gateway.models import ApprovalRecord, ApprovalStatus
@@ -13,20 +15,53 @@ _DEFAULT_MAX_RECORDS = 50_000
 _OPEN = frozenset({ApprovalStatus.PENDING, ApprovalStatus.APPROVED})
 
 
-class ApprovalStore:
-    """In-memory adapter; the interface is intentionally replaceable by PostgreSQL."""
+def _now() -> datetime:
+    return datetime.now(UTC)
 
-    def __init__(self, ttl_seconds: int, max_records: int = _DEFAULT_MAX_RECORDS) -> None:
+
+class ApprovalRepository(Protocol):
+    """Where approvals are kept; a failing store raises StoreUnavailableError."""
+
+    def available(self) -> bool: ...
+
+    def create(self, digest: str, tenant_id: str, requested_by: str) -> ApprovalRecord: ...
+
+    def get(self, approval_id: UUID) -> ApprovalRecord | None: ...
+
+    def approve(
+        self, approval_id: UUID, reviewer: str, rationale: str
+    ) -> ApprovalRecord | None: ...
+
+    def reject(self, approval_id: UUID, reviewer: str, rationale: str) -> ApprovalRecord | None: ...
+
+    def consume(self, approval_id: UUID, digest: str, tenant_id: str) -> bool: ...
+
+    def counts(self) -> dict[ApprovalStatus, int]: ...
+
+
+class ApprovalStore:
+    """In-memory adapter, for one process; SqlApprovalStore is the durable one."""
+
+    def __init__(
+        self,
+        ttl_seconds: int,
+        max_records: int = _DEFAULT_MAX_RECORDS,
+        clock: Callable[[], datetime] = _now,
+    ) -> None:
         self._ttl_seconds = ttl_seconds
         self._max_records = max_records
+        self._clock = clock
         self._records: OrderedDict[UUID, ApprovalRecord] = OrderedDict()
         # Outcomes of records that have been evicted, so the totals reported
         # for approval and expiry rates never go backwards.
         self._evicted: Counter[ApprovalStatus] = Counter()
         self._lock = RLock()
 
+    def available(self) -> bool:
+        return True
+
     def create(self, digest: str, tenant_id: str, requested_by: str) -> ApprovalRecord:
-        now = datetime.now(UTC)
+        now = self._clock()
         record = ApprovalRecord(
             action_digest=digest,
             tenant_id=tenant_id,
@@ -100,7 +135,6 @@ class ApprovalStore:
                 record.status = outcome
             return record.model_copy(deep=True)
 
-    @staticmethod
-    def _expire(record: ApprovalRecord) -> None:
-        if record.status in _OPEN and datetime.now(UTC) >= record.expires_at:
+    def _expire(self, record: ApprovalRecord) -> None:
+        if record.status in _OPEN and self._clock() >= record.expires_at:
             record.status = ApprovalStatus.EXPIRED

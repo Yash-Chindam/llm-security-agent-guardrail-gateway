@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str | None = Field(default=None, min_length=1)
     kafka_topic: str = Field(default="guardrail.security-events", pattern=r"^[A-Za-z0-9._-]+$")
     kafka_client_config: dict[str, str | int | bool] = Field(default_factory=dict)
+    # Section 14. Keep approvals and incident cases in PostgreSQL, or in a
+    # SQLite file for one node. Unset, they live in memory and are lost on
+    # restart. The URL may hold a password, so it is never logged.
+    database_url: SecretStr | None = None
     # Sections 17 and 18. Export decision traces to an OTLP/HTTP collector.
     otlp_endpoint: str | None = Field(default=None, pattern=r"^https?://")
 
@@ -116,6 +120,14 @@ class Settings(BaseSettings):
                 f"jwt_secret must be at least {MINIMUM_HMAC_KEY_BYTES} bytes "
                 f"for {self.jwt_algorithm}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _recognise_the_database(self) -> Self:
+        if self.database_url is not None and not self.database_url.get_secret_value().startswith(
+            ("postgresql://", "postgres://", "sqlite:///")
+        ):
+            raise ValueError("database_url must start with postgresql:// or sqlite:///")
         return self
 
     @model_validator(mode="after")
