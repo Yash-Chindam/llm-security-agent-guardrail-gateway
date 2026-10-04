@@ -24,7 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 # Adapters for the section 14 and 18 infrastructure. The gateway runs
 # without them; each is needed only when its setting is configured.
-kafka = ["kafka-python>=2.2,<3.0"]
+kafka = ["kafka-python>=2.2,<4.0"]
 postgres = ["psycopg[binary]>=3.2,<4.0"]
 otel = [
   "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
@@ -32,7 +32,7 @@ otel = [
 ]
 dev = [
   "bandit[toml]>=1.8,<2.0",
-  "kafka-python>=2.2,<3.0",
+  "kafka-python>=2.2,<4.0",
   "mypy>=1.17,<3.0",
   "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
   "opentelemetry-sdk>=1.30,<2.0",
