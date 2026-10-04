@@ -456,9 +456,10 @@ broker, ClickHouse, or Grafana instance runs in CI.
 ## Running the whole topology
 
 [`deploy/compose`](deploy/compose) runs the gateway with everything it
-integrates with: OPA with the policy bundle, PostgreSQL for approvals and
-incidents, Kafka, ClickHouse consuming the event topic, Prometheus with the
-alert rules, and Grafana with the dashboard.
+integrates with: an Envoy edge in front of it, OPA with the policy bundle,
+Presidio for PII recognition, PostgreSQL for approvals and incidents, Kafka,
+ClickHouse consuming the event topic, Tempo receiving decision traces,
+Prometheus with the alert rules, and Grafana with the dashboard.
 
 ```bash
 cp deploy/compose/.env.example deploy/compose/.env
@@ -471,20 +472,32 @@ preflight step stops the stack from starting while any is missing. Then:
 docker compose -f deploy/compose/docker-compose.yml up --build --wait
 ```
 
-The gateway is on `127.0.0.1:8000` and Grafana on `127.0.0.1:3000`. Nothing
-else is published, and the stores and event pipeline sit on a network with no
-route out. The gateway, OPA, Prometheus, and Grafana run with a read-only
-filesystem and no capabilities.
+The edge is on `127.0.0.1:8000` and Grafana on `127.0.0.1:3000`. Nothing else
+is published: the gateway is reached only through the edge, and everything
+behind it sits on a network with no route out. The gateway, edge, OPA, Tempo,
+Prometheus, and Grafana run with a read-only filesystem and no capabilities.
+
+The edge ([`envoy.yaml`](deploy/compose/envoy.yaml)) applies coarse traffic
+policy before a request reaches the security logic: it routes only `/v1/` and
+`/health/`, so `/metrics` and the API documentation are not reachable from
+outside; it caps request bodies at 2 MB; and it bounds the overall request
+rate. Per-identity and per-tenant quotas stay in the gateway, which knows who
+is calling.
 
 [`smoke_test.py`](deploy/compose/smoke_test.py) drives the running stack and
-follows each decision through every service: OPA decides, the approval is
-consumed once in PostgreSQL, the events reach ClickHouse through Kafka without
-any content, Prometheus scrapes the gateway, and Grafana has the dashboard. CI
-runs it on every pull request.
+follows each decision through every service: the edge refuses what it should,
+OPA decides, Presidio finds a person's name the built-in detectors do not look
+for, the approval is consumed once in PostgreSQL, the events reach ClickHouse
+through Kafka without any content, the traces reach Tempo, Prometheus scrapes
+the gateway, and Grafana has the dashboard. CI runs it on every pull request.
 
-This is one host with one replica of everything, no TLS between services, and
-no edge proxy. It shows the pieces working together; it is not a production
-layout. Presidio, Loki, Tempo, and an Envoy or Kong edge are not included.
+This is one host with one replica of everything and no TLS: the edge listens
+on loopback and does not terminate TLS. It shows the pieces working together;
+it is not a production layout. Loki is not included.
+
+On Docker Engine 25.0.3 a service attached to both networks (the edge,
+Grafana) sometimes starts attached to only one. The smoke test fails when that
+happens; `docker compose up -d --force-recreate --no-deps <service>` fixes it.
 
 ## Kubernetes
 

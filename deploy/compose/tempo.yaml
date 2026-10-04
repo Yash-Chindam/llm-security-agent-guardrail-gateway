@@ -1,0 +1,27 @@
+# A single-process Tempo that receives the gateway's decision traces over
+# OTLP/HTTP. Storage is in memory here: traces do not survive a restart.
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  # Short, so a trace is searchable soon after it ends.
+  trace_idle_period: 5s
+  max_block_duration: 1m
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal
+
+usage_report:
+  reporting_enabled: false

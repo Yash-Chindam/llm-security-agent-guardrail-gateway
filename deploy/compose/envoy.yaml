@@ -1,0 +1,91 @@
+# The edge in front of the gateway (design specification, sections 7 and 18):
+# coarse traffic policy before a request reaches the security logic.
+#
+# - Only the enforcement API and the health probes are routed. /metrics and
+#   the API documentation are not reachable from outside.
+# - Request bodies are capped, so an oversized request is refused here.
+# - A local token bucket bounds the request rate for the listener as a whole.
+#   Per-identity and per-tenant quotas stay in the gateway, which knows who
+#   the caller is.
+#
+# TLS is not terminated here: this stack listens on loopback only. A real edge
+# terminates TLS and this file is where its certificates would be configured.
+static_resources:
+  listeners:
+    - name: edge
+      address:
+        socket_address: {address: 0.0.0.0, port_value: 8080}
+      per_connection_buffer_limit_bytes: 1048576
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: edge
+                use_remote_address: true
+                # Never trust a forwarding header a caller supplied.
+                xff_num_trusted_hops: 0
+                request_timeout: 30s
+                stream_idle_timeout: 60s
+                common_http_protocol_options:
+                  idle_timeout: 120s
+                  max_headers_count: 64
+                route_config:
+                  name: gateway
+                  virtual_hosts:
+                    - name: gateway
+                      domains: ["*"]
+                      routes:
+                        - match: {prefix: "/v1/"}
+                          route: {cluster: gateway, timeout: 30s}
+                        - match: {prefix: "/health/"}
+                          route: {cluster: gateway, timeout: 5s}
+                        - match: {prefix: "/"}
+                          direct_response:
+                            status: 404
+                            body: {inline_string: '{"detail":"Not Found"}'}
+                http_filters:
+                  - name: envoy.filters.http.local_ratelimit
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+                      stat_prefix: edge_rate_limit
+                      token_bucket:
+                        max_tokens: 400
+                        tokens_per_fill: 200
+                        fill_interval: 1s
+                      filter_enabled:
+                        default_value: {numerator: 100, denominator: HUNDRED}
+                      filter_enforced:
+                        default_value: {numerator: 100, denominator: HUNDRED}
+                  - name: envoy.filters.http.buffer
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.buffer.v3.Buffer
+                      # Larger than the gateway's own content limit, so the
+                      # gateway's reasoned refusal is what a caller normally
+                      # sees; this stops only what is far beyond it.
+                      max_request_bytes: 2097152
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+    - name: gateway
+      type: STRICT_DNS
+      # The compose network is IPv4 only; asking for IPv6 first finds nothing.
+      dns_lookup_family: V4_ONLY
+      connect_timeout: 2s
+      load_assignment:
+        cluster_name: gateway
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: {address: gateway, port_value: 8000}
+      health_checks:
+        - timeout: 2s
+          interval: 5s
+          unhealthy_threshold: 2
+          healthy_threshold: 1
+          http_health_check: {path: /health/ready}
+admin:
+  address:
+    socket_address: {address: 127.0.0.1, port_value: 9901}
