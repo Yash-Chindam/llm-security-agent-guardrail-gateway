@@ -281,6 +281,43 @@ unauthenticated like the health probes, so expose it to the scraper only.
 The decision log is in memory and per process. Approvals and incidents can be
 kept in a database; see [Durable approvals and incidents](#durable-approvals-and-incidents).
 
+## Policy as code
+
+By default decisions are made by the built-in policy, in process. Set
+`GUARDRAIL_OPA_URL` to ask an [Open Policy Agent](https://www.openpolicyagent.org/)
+server instead, so policy can be reviewed, tested, and released separately
+from the gateway.
+
+[`deploy/opa/policy`](deploy/opa/policy) is a bundle that decides exactly as
+the built-in policy does: `guardrail/content.rego` for the input, context, and
+output points, `guardrail/action.rego` for tools, and `guardrail/data.json`,
+the tool registry generated from the gateway's own. Start from it and add
+rules.
+
+The gateway tells OPA what it knows, and OPA decides:
+
+- For content: the enforcement point, trust level, tenants, the categories of
+  detector evidence, and the tenant's rule for each sensitive category.
+- For an action: identity, roles, tool, resource, side effect, a digest of the
+  arguments, and what the gateway's parsers found wrong with them.
+
+Content and arguments are never sent. Two things hold whatever a bundle says:
+
+- Arguments the gateway could not parse or found unsafe are denied. A bundle
+  can add restrictions; it cannot remove that one.
+- No answer, a slow answer (`GUARDRAIL_OPA_TIMEOUT_SECONDS`, default 1), an
+  undefined decision, and a malformed one are all `policy_engine_unavailable`,
+  handled as under [Fail-safe behaviour](#fail-safe-behaviour). The replica
+  also reports not ready, since it would deny everything.
+
+The bundle has Rego unit tests. CI also runs a real OPA and checks the bundle
+against the built-in policy across several thousand inputs, then runs the
+whole adversarial suite with OPA deciding.
+
+```bash
+docker run --rm -v "$PWD/deploy/opa/policy:/policy:ro" openpolicyagent/opa:1.9.0-static test /policy -v
+```
+
 ## Durable approvals and incidents
 
 By default approvals and incident cases live in memory: they are lost on

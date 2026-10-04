@@ -43,7 +43,8 @@ from guardrail_gateway.models import (
     PseudonymRestoreResponse,
     SecurityDecision,
 )
-from guardrail_gateway.policy import PolicyEngine
+from guardrail_gateway.opa import OpaPolicyEngine
+from guardrail_gateway.policy import PolicyEngine, policy_available
 from guardrail_gateway.presidio import PresidioInspector
 from guardrail_gateway.sensitive import PseudonymVault
 from guardrail_gateway.service import GatewayService
@@ -121,6 +122,10 @@ def create_app(
         # Flushed on shutdown, so events still queued are sent before exit.
         closing.append(kafka.close)
         audit_transport = kafka
+    if policy is None and runtime_settings.opa_url is not None:
+        opa = OpaPolicyEngine(runtime_settings)
+        closing.append(opa.close)
+        policy = opa
     if tracer_provider is None:
         tracer_provider = build_provider(runtime_settings)
     audit = AuditSink(
@@ -158,7 +163,7 @@ def create_app(
     application = FastAPI(
         lifespan=lifespan,
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.12.0",
+        version="0.13.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service
@@ -194,7 +199,10 @@ def create_app(
         # refused, and a load balancer should see that rather than send traffic
         # into a closed gate.
         audit_state = audit.state()
-        serving = verifier.configured and audit_state != "blocked"
+        # Without its policy decision point this replica denies everything,
+        # so it is taken out of rotation like one that cannot audit.
+        deciding = policy_available(service.policy)
+        serving = verifier.configured and audit_state != "blocked" and deciding
         body = HealthResponse(
             status="ready" if serving else "not_ready",
             policy_version=runtime_settings.policy_version,
@@ -205,6 +213,7 @@ def create_app(
             # every replica out at once would turn a partial outage into a
             # total one.
             stores=stores_state(),
+            policy="available" if deciding else "unavailable",
         )
         code = status.HTTP_200_OK if serving else status.HTTP_503_SERVICE_UNAVAILABLE
         return JSONResponse(status_code=code, content=body.model_dump())

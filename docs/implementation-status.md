@@ -26,7 +26,8 @@ covered by tests, and a partial row names what is missing.
 | §8.2 retrieved context | done | Per-document tenant, classification, and access-list authorization; trust class; embedded instructions and forged message boundaries; per-document and per-batch size limits; admitted content returned as labeled untrusted evidence. |
 | §8.3 after the model | done | Leakage, disallowed categories, structured-output schema, grounding and citations, embedded proposed actions, and disclaimer and abstention rules. Grounding is lexical overlap, not semantic entailment. |
 | §8.4 before a tool action | done | Allowlist, role authorization, side-effect class, tenant/resource, argument schema, SQL/filesystem/URL policy, approval, and a per-trace execution budget. Quota and budget counters are per process, so a limit is enforced per replica; a shared counter store is not implemented. |
-| §9 policy model | done | Every decision carries point, identity, tenant, policy version, verdict, reason code, evidence, digest, and latency. |
+| §7 technology selection | partial | FastAPI, OPA, Presidio, Kafka, ClickHouse, PostgreSQL, and Trivy are in use. The adversarial suite is the project's own, not PyRIT. NeMo Guardrails, Guardrails AI, Falco, and a Kong or Envoy edge are not implemented. |
+| §9 policy model | done | Every decision carries point, identity, tenant, policy version, verdict, reason code, evidence, digest, and latency. The decision point is the built-in policy or an OPA server with a Rego bundle that CI proves equivalent. |
 | §10 content inspection | partial | Deterministic detectors with redacted evidence; normalization of base64, hex, percent-encoding, ROT13, letter-spacing, and Unicode tricks; per-tenant allow/redact/pseudonymize/deny rules; a separate pseudonym vault; canary secrets; a fail-closed Presidio adapter. A learned injection classifier and NeMo/Guardrails AI rails are not implemented. |
 | §11 action broker and sandbox | partial | Allowlist, strict per-tool Pydantic schemas, parsed SQL restricted to read-only queries, canonical paths and URLs, tenant checks, digest-bound approval. The execution sandbox is planned (M10). |
 | §12 red-team design | done | 70 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
@@ -88,10 +89,13 @@ Delivered:
   PostgreSQL or SQLite, consumed exactly once across replicas, with a defined
   outcome when the database is unreachable.
 
+- **M10a policy as code** (`v0.13.0`) — an OPA policy engine with a Rego
+  bundle, its own tests, and a CI check that it decides exactly as the
+  built-in policy does.
+
 Planned, in the order the specification's risk ordering implies:
 
 - **M3b identity provider integration** — OIDC discovery and JWKS rotation,
   asymmetric verification against a live issuer.
-- **M10 policy-as-code and platform (§7, §16, §18)** — OPA policy bundles with
-  fail-closed evaluation, sandboxed execution, compose and Helm topology,
-  signed images.
+- **M10b sandbox and platform (§11, §16, §18)** — sandboxed execution, compose
+  and Helm topology, signed images.

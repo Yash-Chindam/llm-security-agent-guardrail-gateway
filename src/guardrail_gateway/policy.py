@@ -32,7 +32,7 @@ from guardrail_gateway.tools import (
     validate_arguments,
 )
 
-_APPROVAL_EFFECTS = {SideEffect.WRITE, SideEffect.EXTERNAL, SideEffect.DESTRUCTIVE}
+APPROVAL_EFFECTS = frozenset({SideEffect.WRITE, SideEffect.EXTERNAL, SideEffect.DESTRUCTIVE})
 
 
 def content_verdict(
@@ -113,6 +113,28 @@ def action_digest(request: ActionInspectionRequest) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def argument_violation(request: ActionInspectionRequest, limits: ActionPolicyConfig) -> str | None:
+    """What is wrong with a registered tool's arguments, as a reason code.
+
+    This is parsing, not policy: it reports a fact about the arguments that a
+    policy decision point can act on without ever seeing them.
+    """
+
+    spec = TOOLS.get(request.tool)
+    if spec is None:
+        return None
+    arguments = validate_arguments(spec, request.arguments)
+    if arguments is None:
+        return "invalid_tool_arguments"
+    if isinstance(arguments, ExecuteSqlArguments):
+        return sql_violation(arguments.query)
+    if isinstance(arguments, ReadFileArguments):
+        return path_violation(arguments.path, limits)
+    if isinstance(arguments, FetchUrlArguments):
+        return url_violation(arguments.url, limits)
+    return None
+
+
 def action_verdict(
     request: ActionInspectionRequest,
     roles: frozenset[Role],
@@ -133,21 +155,11 @@ def action_verdict(
     if not request.resource.startswith(expected_prefix):
         return Verdict.DENY, "resource_tenant_mismatch"
 
-    arguments = validate_arguments(spec, request.arguments)
-    if arguments is None:
-        return Verdict.DENY, "invalid_tool_arguments"
-
-    violation: str | None = None
-    if isinstance(arguments, ExecuteSqlArguments):
-        violation = sql_violation(arguments.query)
-    elif isinstance(arguments, ReadFileArguments):
-        violation = path_violation(arguments.path, limits)
-    elif isinstance(arguments, FetchUrlArguments):
-        violation = url_violation(arguments.url, limits)
+    violation = argument_violation(request, limits)
     if violation is not None:
         return Verdict.DENY, violation
 
-    if request.side_effect in _APPROVAL_EFFECTS:
+    if request.side_effect in APPROVAL_EFFECTS:
         return Verdict.REQUIRE_APPROVAL, "risky_action_requires_approval"
     return Verdict.ALLOW, "action_policy_allow"
 
@@ -173,6 +185,13 @@ class PolicyEngine(Protocol):
         self, request: ActionInspectionRequest, roles: frozenset[Role]
     ) -> tuple[Verdict, str]:
         """Return a verdict or raise PolicyEngineUnavailableError."""
+
+
+def policy_available(engine: PolicyEngine) -> bool:
+    """Whether the decision point can answer; an engine that cannot tell says yes."""
+
+    probe = getattr(engine, "available", None)
+    return bool(probe()) if callable(probe) else True
 
 
 class LocalPolicyEngine:
