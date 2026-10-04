@@ -37,6 +37,15 @@ groups:
         annotations:
           summary: An incident case is open and unresolved.
 
+      - alert: GuardrailStoreUnavailable
+        expr: min(guardrail_store_available) < 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The approval and incident store is unreachable.
+          description: Actions that need approval are being denied until the database returns.
+
       - alert: GuardrailDependencyUnavailable
         expr: >-
           sum(rate(guardrail_decisions_total{reason_code=~"policy_engine_unavailable|content_inspection_unavailable|audit_durability_unavailable"}[5m])) > 0

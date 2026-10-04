@@ -248,6 +248,7 @@ half-enforced. The built-in adapters run in process; `create_app` accepts a
 | Audit buffer full, `GUARDRAIL_AUDIT_MANDATORY=true` (default) | Enforcement blocks until the transport recovers; not ready. | `audit_durability_unavailable` |
 | Audit buffer full, `GUARDRAIL_AUDIT_MANDATORY=false` | Enforcement continues; events past the bound are counted and dropped. | unchanged |
 | Approval expired | The action must be reviewed again. | `invalid_or_expired_approval` |
+| Approval store unreachable | An action that needs or presents an approval is denied. | `approval_store_unavailable` |
 | Red-team regression | The release gate fails. | n/a |
 
 `/health/ready` reports `audit` as `durable`, `buffering`, or `blocked`.
@@ -277,9 +278,38 @@ detector-latency histogram; credential rejections; approvals by status; audit
 events pending, in flight, and dropped; and open incidents. Tenant and identity are never labels. The endpoint is
 unauthenticated like the health probes, so expose it to the scraper only.
 
-The decision log, incident store, and approval store are in memory and per
-process. Durable PostgreSQL adapters are tracked in
-[`docs/implementation-status.md`](docs/implementation-status.md).
+The decision log is in memory and per process. Approvals and incidents can be
+kept in a database; see [Durable approvals and incidents](#durable-approvals-and-incidents).
+
+## Durable approvals and incidents
+
+By default approvals and incident cases live in memory: they are lost on
+restart and each replica has its own. Set `GUARDRAIL_DATABASE_URL` to keep them
+in a database instead.
+
+| URL | Use |
+|---|---|
+| `postgresql://user@host/dbname` | Shared by every replica. Needs the `postgres` extra, which the container image includes. |
+| `sqlite:///path/to/gateway.db` | Durable for a single node, with no extra service. |
+
+The tables are created on first use. An approval is consumed by one
+conditional `UPDATE`, so when several replicas present the same approval at
+once the database lets exactly one of them use it. Expiry is compared against
+the gateway's clock, so replicas need synchronized time.
+
+When the database is unreachable:
+
+| Request | Behaviour |
+|---|---|
+| An action that needs approval, or presents one | Denied with `approval_store_unavailable`. |
+| Content inspection, and actions that need no approval | Unaffected. |
+| Reading or adjudicating an approval or incident | `503` with `store_unavailable`. |
+| A canary sighting | Still denied and audited; the incident is not recorded. |
+| `/health/ready` | Stays ready and reports `stores: unavailable`. |
+| `/metrics` | Still served; `guardrail_store_available` reads 0. |
+
+The decision log stays in memory, and so do the quota and budget counters;
+decisions are published durably as events instead.
 
 ## Events, analytics, and tracing
 

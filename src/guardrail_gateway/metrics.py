@@ -11,10 +11,12 @@ a metrics endpoint into a list of who uses the system.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 
 from guardrail_gateway.models import ApprovalStatus, SecurityDecision
+from guardrail_gateway.stores import StoreUnavailableError
 
 CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
@@ -75,6 +77,11 @@ class GatewayMetrics:
             buckets=_LATENCY_BUCKETS,
             registry=self.registry,
         )
+        self._store_available = Gauge(
+            "guardrail_store_available",
+            "Whether the approval and incident store answered (1) or not (0).",
+            registry=self.registry,
+        )
         self._incidents = Gauge(
             "guardrail_incidents_open",
             "Incident cases that have not been resolved or closed.",
@@ -97,15 +104,23 @@ class GatewayMetrics:
         approvals: Callable[[], dict[ApprovalStatus, int]],
         audit_pending: int,
         audit_dropped: int,
-        incidents_open: int,
+        incidents_open: Callable[[], int],
         audit_in_flight: int = 0,
     ) -> bytes:
-        """Refresh the values read from other components, then serialize."""
+        """Refresh the values read from other components, then serialize.
 
-        for status, count in approvals().items():
-            self._approvals.labels(status.value).set(count)
+        A store that is down must not take the whole scrape with it: the other
+        metrics are what an operator needs to see during that outage. The
+        store's own gauges keep their last values and availability reads 0.
+        """
+
+        self._store_available.set(0)
+        with suppress(StoreUnavailableError):
+            for status, count in approvals().items():
+                self._approvals.labels(status.value).set(count)
+            self._incidents.set(incidents_open())
+            self._store_available.set(1)
         self._audit_pending.set(audit_pending)
         self._audit_dropped.set(audit_dropped)
         self._audit_in_flight.set(audit_in_flight)
-        self._incidents.set(incidents_open)
         return generate_latest(self.registry)

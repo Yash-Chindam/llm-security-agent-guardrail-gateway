@@ -13,8 +13,10 @@ no raw content, so the log holds nothing the caller was not already shown.
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Callable
 from datetime import UTC, datetime
 from threading import RLock
+from typing import Protocol
 from uuid import UUID
 
 from guardrail_gateway.models import (
@@ -58,13 +60,55 @@ class DecisionLog:
             ]
 
 
-class IncidentStore:
-    """In-memory adapter; the interface is replaceable by PostgreSQL."""
+def _now() -> datetime:
+    return datetime.now(UTC)
 
-    def __init__(self, max_incidents: int) -> None:
+
+class IncidentRepository(Protocol):
+    """Where incident cases are kept; a failing store raises StoreUnavailableError."""
+
+    def available(self) -> bool: ...
+
+    def open(
+        self,
+        tenant_id: str,
+        title: str,
+        severity: Severity,
+        opened_by: str,
+        decisions: list[SecurityDecision],
+    ) -> IncidentCase: ...
+
+    def open_for_trace(self, trace_id: UUID, tenant_id: str, title: str) -> IncidentCase | None: ...
+
+    def attach(self, incident_id: UUID, decision: SecurityDecision) -> None: ...
+
+    def get(self, incident_id: UUID, tenant_id: str) -> IncidentCase | None: ...
+
+    def list(self, tenant_id: str) -> list[IncidentCase]: ...
+
+    def update(
+        self,
+        incident_id: UUID,
+        tenant_id: str,
+        status: IncidentStatus | None,
+        disposition: Disposition | None,
+        remediation: str | None,
+    ) -> IncidentCase | None: ...
+
+    def open_count(self) -> int: ...
+
+
+class IncidentStore:
+    """In-memory adapter, for one process; SqlIncidentStore is the durable one."""
+
+    def __init__(self, max_incidents: int, clock: Callable[[], datetime] = _now) -> None:
         self._max_incidents = max_incidents
+        self._clock = clock
         self._incidents: OrderedDict[UUID, IncidentCase] = OrderedDict()
         self._lock = RLock()
+
+    def available(self) -> bool:
+        return True
 
     def open(
         self,
@@ -74,7 +118,7 @@ class IncidentStore:
         opened_by: str,
         decisions: list[SecurityDecision],
     ) -> IncidentCase:
-        now = datetime.now(UTC)
+        now = self._clock()
         incident = IncidentCase(
             tenant_id=tenant_id,
             title=title,
@@ -111,7 +155,7 @@ class IncidentStore:
             if incident is None or decision.decision_id in incident.decision_ids:
                 return
             incident.decision_ids.append(decision.decision_id)
-            incident.updated_at = datetime.now(UTC)
+            incident.updated_at = self._clock()
 
     def get(self, incident_id: UUID, tenant_id: str) -> IncidentCase | None:
         with self._lock:
@@ -146,7 +190,7 @@ class IncidentStore:
                 incident.disposition = disposition
             if remediation is not None:
                 incident.remediation = remediation
-            incident.updated_at = datetime.now(UTC)
+            incident.updated_at = self._clock()
             return incident.model_copy(deep=True)
 
     def open_count(self) -> int:
