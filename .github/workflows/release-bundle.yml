@@ -10,6 +10,8 @@ on:
 
 permissions:
   contents: read
+  # The signature is issued to this workflow's identity, not to a stored key.
+  id-token: write
 
 jobs:
   release-bundle:
@@ -27,8 +29,20 @@ jobs:
           outputs: type=oci,dest=${{ runner.temp }}/guardrail-gateway.tar
           provenance: mode=max
           sbom: true
+      - uses: sigstore/cosign-installer@v3
+      # Signed without a long-lived key: the certificate names this workflow
+      # in this repository, so a verifier can require exactly that origin.
+      - name: Sign the image archive
+        working-directory: ${{ runner.temp }}
+        run: |
+          cosign sign-blob --yes \
+            --bundle guardrail-gateway.sigstore.json guardrail-gateway.tar
+          sha256sum guardrail-gateway.tar > guardrail-gateway.tar.sha256
       - uses: actions/upload-artifact@v7
         with:
           name: guardrail-gateway-oci-${{ inputs.ref }}
-          path: ${{ runner.temp }}/guardrail-gateway.tar
+          path: |
+            ${{ runner.temp }}/guardrail-gateway.tar
+            ${{ runner.temp }}/guardrail-gateway.tar.sha256
+            ${{ runner.temp }}/guardrail-gateway.sigstore.json
           retention-days: 30

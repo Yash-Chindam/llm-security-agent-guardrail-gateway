@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "guardrail.fullname" . }}
+  labels:
+    {{- include "guardrail.labels" . | nindent 4 }}
+data:
+  {{- range $name, $value := .Values.config }}
+  {{- if not (hasPrefix "GUARDRAIL_" $name) }}
+  {{- fail (printf "config.%s: only GUARDRAIL_* settings belong here" $name) }}
+  {{- end }}
+  {{- if regexMatch "(SECRET|PASSWORD|DATABASE_URL|CANARY)" $name }}
+  {{- fail (printf "config.%s holds a credential: put it in the Secret named by existingSecret" $name) }}
+  {{- end }}
+  {{ $name }}: {{ $value | quote }}
+  {{- end }}
+{{- if .Values.opa.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "guardrail.fullname" . }}-policy
+  labels:
+    {{- include "guardrail.labels" . | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/policy/*" }}
+  {{ base $path }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+{{- end }}

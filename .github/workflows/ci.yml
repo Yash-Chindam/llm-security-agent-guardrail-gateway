@@ -152,6 +152,61 @@ jobs:
       - if: ${{ always() }}
         run: docker compose down --volumes
 
+  # The chart is linted, checked against the Kubernetes schemas, and then
+  # installed on a real cluster, where the gateway only becomes ready if its
+  # OPA sidecar loaded the policy from the ConfigMap and answered.
+  helm:
+    name: helm
+    runs-on: ubuntu-latest
+    env:
+      CHART: deploy/helm/guardrail-gateway
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: pytest tests/unit/test_helm_chart.py --no-cov
+      - name: Lint and validate the rendered manifests
+        run: |
+          set -euo pipefail
+          digest="sha256:$(printf 'a%.0s' $(seq 1 64))"
+          args=(--set image.repository=registry.example/gateway --set "image.digest=$digest"
+                --set existingSecret=guardrail-credentials)
+          helm lint "$CHART" "${args[@]}"
+          helm template release "$CHART" "${args[@]}" \
+            | docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0 -strict -summary -
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: chart
+      - name: Install the chart
+        run: |
+          set -euo pipefail
+          docker build -t guardrail-gateway:ci .
+          kind load docker-image guardrail-gateway:ci --name chart
+          kubectl create secret generic guardrail-credentials \
+            --from-literal=GUARDRAIL_JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          helm install gateway "$CHART" \
+            --set image.repository=guardrail-gateway --set image.tag=ci --set image.allowTag=true \
+            --set existingSecret=guardrail-credentials --set replicaCount=1 \
+            --wait --timeout 240s
+      - name: The gateway is ready and OPA is its decision point
+        run: |
+          set -euo pipefail
+          health=$(kubectl exec deploy/gateway-guardrail-gateway -c gateway -- python -c \
+            "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/health/ready').read().decode())")
+          echo "$health"
+          echo "$health" | grep -q '"policy":"available"'
+          echo "$health" | grep -q '"status":"ready"'
+          kubectl exec deploy/gateway-guardrail-gateway -c gateway -- python -c \
+            "import os; assert os.environ['GUARDRAIL_OPA_URL'] == 'http://127.0.0.1:8181'"
+      - if: ${{ failure() }}
+        run: |
+          kubectl get pods -o wide || true
+          kubectl describe pods || true
+          kubectl logs deploy/gateway-guardrail-gateway --all-containers --tail 80 || true
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest
@@ -233,7 +288,11 @@ jobs:
 
   release-bundle:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [unit, integration, postgres, opa, sandbox, compose, coverage, e2e, security, container]
+    needs: [unit, integration, postgres, opa, sandbox, compose, helm, coverage, e2e, security, container]
+    permissions:
+      contents: read
+      # Keyless signing of the release artifact.
+      id-token: write
     uses: ./.github/workflows/release-bundle.yml
     with:
       ref: ${{ github.sha }}

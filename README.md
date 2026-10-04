@@ -486,6 +486,33 @@ This is one host with one replica of everything, no TLS between services, and
 no edge proxy. It shows the pieces working together; it is not a production
 layout. Presidio, Loki, Tempo, and an Envoy or Kong edge are not included.
 
+## Kubernetes
+
+[`deploy/helm/guardrail-gateway`](deploy/helm/guardrail-gateway) deploys the
+gateway with an OPA sidecar that holds the policy bundle and listens on
+loopback only.
+
+```bash
+helm install gateway deploy/helm/guardrail-gateway \
+  --set image.repository=registry.example/guardrail-gateway \
+  --set image.digest=sha256:... \
+  --set existingSecret=guardrail-credentials
+```
+
+| Property | How the chart provides it |
+|---|---|
+| Immutable image | Deployed by digest. A tag is refused unless `image.allowTag` is set. |
+| Credentials | Read from a Secret you manage (`existingSecret`), for example through an external secret manager. The chart creates no Secret and refuses a credential placed in `config`. |
+| Least privilege | A dedicated ServiceAccount with no API token mounted. |
+| Container hardening | Every container is non-root with a read-only root filesystem, no capabilities, no privilege escalation, and the runtime's default seccomp profile. |
+| Network | A NetworkPolicy that denies all ingress and all egress except DNS. Callers, the metrics scraper, Kafka, PostgreSQL, and the identity provider are each added explicitly in `networkPolicy`. |
+| Availability | Rolling updates never drop below the running replicas, a PodDisruptionBudget, and a rollout whenever settings or policy change. |
+
+CI renders the chart, validates it against the Kubernetes schemas, installs it
+on a kind cluster, and checks that the gateway became ready with the sidecar
+as its policy decision point. Whether the NetworkPolicy is enforced depends on
+your cluster's network plugin, and CI does not test that.
+
 ## Test layers
 
 ```bash
@@ -559,6 +586,17 @@ gate, a reusable workflow creates a private OCI image artifact with provenance
 and SBOM metadata for controlled deployment. Because a merge pushed with
 `GITHUB_TOKEN` emits no push event, the automerge job calls that same reusable
 workflow directly for the merge commit it creates.
+
+The archive is signed with [cosign](https://docs.sigstore.dev/) using the
+workflow's own identity rather than a stored key, and published with its
+SHA-256 and signature bundle. To verify a downloaded archive:
+
+```bash
+cosign verify-blob guardrail-gateway.tar --bundle guardrail-gateway.sigstore.json --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/Yash-Chindam/llm-security-agent-guardrail-gateway/\.github/workflows/release-bundle\.yml@'
+```
+
+The image is not pushed to a registry by this repository; load the verified
+archive into yours and deploy it by digest.
 
 ## Repository automation
 

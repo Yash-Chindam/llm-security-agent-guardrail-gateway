@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "guardrail.fullname" . }}
+  labels:
+    {{- include "guardrail.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "guardrail.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "guardrail.labels" . | nindent 8 }}
+      annotations:
+        # A changed setting or policy rolls the pods, so no replica keeps
+        # deciding with the old one.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "guardrail.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "guardrail.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "guardrail.containerSecurityContext" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "guardrail.fullname" . }}
+            - secretRef:
+                name: {{ required "existingSecret is required: create a Secret holding GUARDRAIL_JWT_SECRET or the other credentials the gateway needs" .Values.existingSecret }}
+          {{- if .Values.opa.enabled }}
+          env:
+            - name: GUARDRAIL_OPA_URL
+              value: http://127.0.0.1:8181
+          {{- end }}
+          startupProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          # Not ready while it cannot verify a credential, audit a decision,
+          # or reach its policy decision point: it would refuse everything.
+          readinessProbe:
+            httpGet: {path: /health/ready, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+        {{- if .Values.opa.enabled }}
+        - name: opa
+          image: {{ .Values.opa.image | quote }}
+          args:
+            - run
+            - --server
+            # Loopback only: nothing but the gateway in this pod can ask.
+            - --addr=127.0.0.1:8181
+            - --diagnostic-addr=0.0.0.0:8282
+            # A ConfigMap volume holds hidden bookkeeping entries next to the
+            # files; without this OPA would load every policy twice.
+            - --ignore=.*
+            - /policy
+          securityContext:
+            {{- include "guardrail.containerSecurityContext" . | nindent 12 }}
+          ports:
+            - name: opa-diagnostic
+              containerPort: 8282
+              protocol: TCP
+          livenessProbe:
+            httpGet: {path: /health, port: opa-diagnostic}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: "/health?bundle=true", port: opa-diagnostic}
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.opa.resources | nindent 12 }}
+          volumeMounts:
+            - name: policy
+              mountPath: /policy/guardrail
+              readOnly: true
+        {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        {{- if .Values.opa.enabled }}
+        - name: policy
+          configMap:
+            name: {{ include "guardrail.fullname" . }}-policy
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

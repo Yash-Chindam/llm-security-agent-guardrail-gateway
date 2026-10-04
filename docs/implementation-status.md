@@ -34,9 +34,9 @@ covered by tests, and a partial row names what is missing.
 | §13 information model | done | SecurityDecision, DetectorEvidence, ActionRequest, ApprovalRecord, RedTeamRun, and IncidentCase exist. Approvals and incidents can be kept in PostgreSQL or SQLite; the decision log is in memory. |
 | §14 events and analytics | done | Structured, redacted decision events delivered through a transport port with ordered, bounded buffering, and a tenant-scoped decision log for auditors. A Kafka transport and a ClickHouse schema, both exercised against real services by the compose job in CI, a Grafana dashboard, and Prometheus alert rules, each checked against what the gateway emits. Approvals and incidents are stored in PostgreSQL, with exactly-once approval use enforced by the database and tested against a real PostgreSQL in CI. Configuration is not stored in PostgreSQL: it comes from the environment. |
 | §15 fail-safe behaviour | done | Policy engine, detectors, and audit transport sit behind ports with a fixed outcome when each is lost: fail closed for side effects, optional restricted read-only mode, bounded audit buffering, and blocking when mandatory audit durability is lost. |
-| §16 platform security | partial | Verified bearer identity with OIDC discovery and key rotation (tested against a stand-in provider, not a running Keycloak), non-root image, no build tooling in runtime, Trivy, SBOM, provenance. NetworkPolicies, read-only filesystems, service accounts, and image signing are planned (M10c). A secret manager and Falco are not implemented. |
+| §16 platform security | partial | Verified bearer identity with OIDC discovery and key rotation (tested against a stand-in provider, not a running Keycloak), non-root image, no build tooling in runtime, Trivy, SBOM, provenance. A Helm chart with a default-deny NetworkPolicy, read-only non-root containers, a ServiceAccount with no API token, credentials only from an externally managed Secret, and deployment by digest; the release archive is signed with cosign. NetworkPolicy enforcement is not tested, and Falco is not implemented. |
 | §17 observability | done | The red-team suite reports attack-success, false-positive, and leakage rates. `/metrics` exposes decisions, policy and detector latency, approvals, audit lag and drops, and open incidents, with a dashboard and alert rules. Each decision is an OpenTelemetry span with a child span per detector. |
-| §18 deployment topology | partial | A compose topology with the gateway, OPA, PostgreSQL, Kafka, ClickHouse, Prometheus, and Grafana, exercised end to end in CI. A Helm chart is planned (M10d). An Envoy or Kong edge, Presidio, isolated PyRIT workers, Loki, and Tempo are not included. |
+| §18 deployment topology | partial | A compose topology with the gateway, OPA, PostgreSQL, Kafka, ClickHouse, Prometheus, and Grafana, exercised end to end in CI. A Helm chart with an OPA sidecar, installed on a kind cluster in CI. An Envoy or Kong edge, Presidio, isolated PyRIT workers, Loki, and Tempo are not included. |
 
 ## Milestones
 
@@ -103,7 +103,32 @@ Delivered:
   Kafka, ClickHouse, Prometheus, and Grafana, with an end-to-end smoke test in
   CI.
 
-Planned, in the order the specification's risk ordering implies:
+- **M10d Kubernetes** (`v0.17.0`) — Helm chart with an OPA sidecar and a
+  default-deny NetworkPolicy, and a signed release archive.
 
-- **M10d Kubernetes (§16, §18)** — Helm chart, NetworkPolicies, signed
-  release artifacts.
+## Not implemented
+
+Every milestone above is delivered. What the specification names and this
+repository still does not do:
+
+- **§10** A learned prompt-injection classifier, and NeMo Guardrails or
+  Guardrails AI rails. Detection is deterministic, plus Presidio when
+  configured.
+- **§7, §12** PyRIT. The adversarial suite is this project's own runner and
+  scenarios, not PyRIT targets and scorers, and there are no isolated PyRIT
+  workers.
+- **§16** Falco runtime detection.
+- **§18** An Envoy or Kong edge, Loki, and a Tempo deployment. The gateway
+  exports traces to any OTLP collector; none is deployed here.
+
+Implemented but not verified against the real thing:
+
+- OIDC against a running Keycloak (tested with a stand-in provider).
+- NetworkPolicy enforcement (depends on the cluster's network plugin).
+- The sandbox under a stronger OCI runtime such as gVisor.
+- Presidio (the adapter is tested against a stand-in analyzer).
+
+Known limits of what is implemented:
+
+- Quota and budget counters and the decision log are per replica.
+- Grounding is lexical overlap, not semantic entailment.
