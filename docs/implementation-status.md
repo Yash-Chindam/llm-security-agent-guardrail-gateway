@@ -25,16 +25,16 @@ covered by tests, and a partial row names what is missing.
 | §8.1 before the model | done | Identity, tenant, quota, injection, PII/secret, size, model eligibility, local-only routing, and violation history are enforced. Encoding normalization beyond base64 is tracked under §10. |
 | §8.2 retrieved context | done | Per-document tenant, classification, and access-list authorization; trust class; embedded instructions and forged message boundaries; per-document and per-batch size limits; admitted content returned as labeled untrusted evidence. |
 | §8.3 after the model | done | Leakage, disallowed categories, structured-output schema, grounding and citations, embedded proposed actions, and disclaimer and abstention rules. Grounding is lexical overlap, not semantic entailment. |
-| §8.4 before a tool action | done | Allowlist, role authorization, side-effect class, tenant/resource, argument schema, SQL/filesystem/URL policy, approval, and a per-trace execution budget. Counters are per process; a shared store is planned with M9. |
+| §8.4 before a tool action | done | Allowlist, role authorization, side-effect class, tenant/resource, argument schema, SQL/filesystem/URL policy, approval, and a per-trace execution budget. Counters are per process; a shared store is planned with M9b. |
 | §9 policy model | done | Every decision carries point, identity, tenant, policy version, verdict, reason code, evidence, digest, and latency. |
 | §10 content inspection | partial | Deterministic detectors with redacted evidence; normalization of base64, hex, percent-encoding, ROT13, letter-spacing, and Unicode tricks; per-tenant allow/redact/pseudonymize/deny rules; a separate pseudonym vault; canary secrets; a fail-closed Presidio adapter. A learned injection classifier and NeMo/Guardrails AI rails are not implemented. |
 | §11 action broker and sandbox | partial | Allowlist, strict per-tool Pydantic schemas, parsed SQL restricted to read-only queries, canonical paths and URLs, tenant checks, digest-bound approval. The execution sandbox is planned (M10). |
-| §12 red-team design | done | 68 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
-| §13 information model | partial | SecurityDecision, DetectorEvidence, ActionRequest, ApprovalRecord, and RedTeamRun exist. IncidentCase is planned (M9). |
-| §14 events and analytics | partial | Structured, redacted decision events delivered through a transport port with ordered, bounded buffering. Kafka, ClickHouse, PostgreSQL, and Grafana adapters are planned (M9). |
+| §12 red-team design | done | 70 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
+| §13 information model | done | SecurityDecision, DetectorEvidence, ActionRequest, ApprovalRecord, RedTeamRun, and IncidentCase exist. Approvals, decisions, and incidents are held in memory; durable stores are tracked under §14. |
+| §14 events and analytics | partial | Structured, redacted decision events delivered through a transport port with ordered, bounded buffering, and a tenant-scoped decision log for auditors. Kafka, ClickHouse, PostgreSQL, and Grafana adapters are planned (M9b). |
 | §15 fail-safe behaviour | done | Policy engine, detectors, and audit transport sit behind ports with a fixed outcome when each is lost: fail closed for side effects, optional restricted read-only mode, bounded audit buffering, and blocking when mandatory audit durability is lost. |
 | §16 platform security | partial | Verified bearer identity, non-root image, no build tooling in runtime, Trivy, SBOM, provenance. OIDC discovery, secret manager, NetworkPolicies, image signing, and Falco are planned (M3b, M10). |
-| §17 observability | partial | The red-team suite reports the required rates and latency percentiles. A runtime metrics endpoint and traces are planned (M9). |
+| §17 observability | partial | The red-team suite reports the required rates and latency percentiles, and `/metrics` exposes decisions, latency, approvals, audit lag and drops, and open incidents. OpenTelemetry traces and dashboards are planned (M9b). |
 | §18 deployment topology | planned | Compose and Helm topology (M10). |
 
 ## Milestones
@@ -76,13 +76,17 @@ Delivered:
   per-tenant entity rules, pseudonymization with a separate vault, canary
   secrets, and a Presidio adapter.
 
+- **M9a audit, incidents, and metrics** (`v0.10.0`) — decision log, incident
+  cases with automatic canary incidents, approval rejection, the auditor role,
+  and a Prometheus metrics endpoint.
+
 Planned, in the order the specification's risk ordering implies:
 
 - **M3b identity provider integration** — OIDC discovery and JWKS rotation,
   asymmetric verification against a live issuer.
-- **M9 events, analytics, and incidents (§13, §14, §17)** — Kafka transport,
-  ClickHouse analytics, PostgreSQL for approvals and incident cases,
-  Prometheus and OpenTelemetry.
+- **M9b events and analytics (§14, §17)** — Kafka transport, ClickHouse
+  analytics, PostgreSQL for approvals and incident cases, Grafana dashboards,
+  and OpenTelemetry traces.
 - **M10 policy-as-code and platform (§7, §16, §18)** — OPA policy bundles with
   fail-closed evaluation, sandboxed execution, compose and Helm topology,
   signed images.
