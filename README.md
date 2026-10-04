@@ -273,13 +273,56 @@ incident on its own; further sightings in the same trace join that case.
 
 `GET /metrics` serves the Prometheus exposition format: decisions by
 enforcement point, verdict, and reason code; a decision-latency histogram;
-credential rejections; approvals by status; audit events pending and dropped;
-and open incidents. Tenant and identity are never labels. The endpoint is
+detector-latency histogram; credential rejections; approvals by status; audit
+events pending, in flight, and dropped; and open incidents. Tenant and identity are never labels. The endpoint is
 unauthenticated like the health probes, so expose it to the scraper only.
 
 The decision log, incident store, and approval store are in memory and per
 process. Durable PostgreSQL adapters are tracked in
 [`docs/implementation-status.md`](docs/implementation-status.md).
+
+## Events, analytics, and tracing
+
+Every decision, credential refusal, and re-identification is published as one
+JSON event with an `event_id`, a `schema_version`, and the time it was decided.
+Events carry reason codes and evidence categories, never content, arguments,
+or evidence excerpts.
+
+| Setting | Effect |
+|---|---|
+| `GUARDRAIL_KAFKA_BOOTSTRAP_SERVERS` | Publish events to Kafka instead of keeping them in process. Needs the `kafka` extra, which the container image includes. |
+| `GUARDRAIL_KAFKA_TOPIC` | Topic name; default `guardrail.security-events`. |
+| `GUARDRAIL_KAFKA_CLIENT_CONFIG` | JSON object of extra `kafka-python` producer options, such as TLS and SASL. |
+| `GUARDRAIL_OTLP_ENDPOINT` | Export decision traces to an OTLP/HTTP collector. Needs the `otel` extra, which the container image includes. |
+
+The producer is idempotent and waits for every in-sync replica; neither can be
+configured away. Events are keyed by tenant, so one tenant's events stay in
+order. Publishing happens on a background sender, so a decision does not wait
+on a broker. A broker that is down, including at startup, is the audit outage
+described under [Fail-safe behaviour](#fail-safe-behaviour): events buffer in
+order, an event the broker refuses is sent again before anything newer, and
+with mandatory audit the gateway blocks once the buffer is full.
+
+Each enforcement call is one span with a child span per detector. Spans carry
+the enforcement point, verdict, reason code, policy version, and evidence
+categories; they never carry content, tenant, or identity.
+
+[`deploy/`](deploy) holds the analytics side:
+
+- [`clickhouse/schema.sql`](deploy/clickhouse/schema.sql) consumes the topic
+  into a `ReplacingMergeTree` table and defines an hourly rollup of block
+  rates and latency percentiles.
+- [`grafana/dashboards/guardrail-gateway.json`](deploy/grafana/dashboards/guardrail-gateway.json)
+  charts the `/metrics` endpoint: verdicts, block rates, decision and detector
+  latency, approvals, audit delivery, and incidents.
+- [`prometheus/alerts.yml`](deploy/prometheus/alerts.yml) alerts on dropped or
+  backlogged audit events, a dependency failing closed, open incidents, and
+  latency.
+
+The unit suite checks these files against the gateway: every published field
+has a column, and every metric a panel or alert names is one the gateway
+exports. The adapter was also run against a real Kafka broker by hand; no
+broker, ClickHouse, or Grafana instance runs in CI.
 
 ## Test layers
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "guardrail-gateway"
-version = "0.10.0"
+version = "0.11.0"
 description = "Policy-aware security gateway for LLM and agent workflows"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,6 +13,7 @@ dependencies = [
   "fastapi>=0.116,<1.0",
   "httpx>=0.28,<1.0",
   "jsonschema>=4.23,<5.0",
+  "opentelemetry-api>=1.30,<2.0",
   "prometheus-client>=0.22,<1.0",
   "pydantic-settings>=2.10,<3.0",
   "pyjwt[crypto]>=2.10,<3.0",
@@ -21,9 +22,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Adapters for the section 14 and 18 infrastructure. The gateway runs
+# without them; each is needed only when its setting is configured.
+kafka = ["kafka-python>=2.2,<3.0"]
+otel = [
+  "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
+  "opentelemetry-sdk>=1.30,<2.0",
+]
 dev = [
   "bandit[toml]>=1.8,<2.0",
+  "kafka-python>=2.2,<3.0",
   "mypy>=1.17,<3.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.30,<2.0",
+  "opentelemetry-sdk>=1.30,<2.0",
   "pip-audit>=2.9,<3.0",
   "pytest>=9.0.3,<10.0",
   "pytest-cov>=6.2,<8.0",

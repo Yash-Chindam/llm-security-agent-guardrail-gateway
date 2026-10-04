@@ -1,0 +1,64 @@
+# Alert rules for the gateway's /metrics endpoint (design specification,
+# sections 15 and 17). tests/unit/test_analytics_assets.py fails when a rule
+# names a metric the gateway does not export.
+groups:
+  - name: guardrail-gateway
+    rules:
+      - alert: GuardrailAuditEventsDropped
+        expr: guardrail_audit_events_dropped > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Audit events were lost because the outage buffer filled.
+          description: Decisions were enforced without a durable trail. Restore the event transport and review the gap.
+
+      - alert: GuardrailAuditBacklog
+        expr: guardrail_audit_events_pending > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: The audit transport has been refusing events for five minutes.
+          description: Events are buffering. With mandatory audit, enforcement blocks once the buffer is full.
+
+      - alert: GuardrailAuditDeliveryLag
+        expr: guardrail_audit_events_in_flight > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Audit events are queued faster than the broker acknowledges them.
+
+      - alert: GuardrailCanaryIncidentOpen
+        expr: guardrail_incidents_open > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: An incident case is open and unresolved.
+
+      - alert: GuardrailDependencyUnavailable
+        expr: >-
+          sum(rate(guardrail_decisions_total{reason_code=~"policy_engine_unavailable|content_inspection_unavailable|audit_durability_unavailable"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: A security dependency is down and requests are failing closed.
+
+      - alert: GuardrailDecisionLatencyHigh
+        expr: >-
+          histogram_quantile(0.95, sum by (le, enforcement_point) (rate(guardrail_decision_latency_seconds_bucket[5m]))) > 0.25
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: P95 decision latency is above 250 ms.
+
+      - alert: GuardrailCredentialRejectionSpike
+        expr: sum(rate(guardrail_credential_rejections_total[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Requests are being refused for bad credentials at a sustained rate.

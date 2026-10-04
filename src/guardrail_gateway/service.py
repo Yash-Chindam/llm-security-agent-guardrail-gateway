@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from functools import wraps
 from time import monotonic, perf_counter
+from typing import Concatenate, ParamSpec, TypeVar
 from uuid import UUID
+
+from opentelemetry import trace
 
 from guardrail_gateway.approvals import ApprovalStore
 from guardrail_gateway.audit import AuditSink
@@ -58,6 +62,10 @@ from guardrail_gateway.sensitive import (
     action_resolver,
     transform,
 )
+from guardrail_gateway.tracing import record_decision, tracer_for
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 # Effects that change nothing outside the gateway, and so may continue under
 # the built-in policy while the policy decision point is unreachable.
@@ -74,6 +82,27 @@ _SYSTEM_ACTOR = "guardrail-gateway"
 _ENVELOPE_TAG = re.compile(r"<(/?\s*untrusted_evidence)", re.IGNORECASE)
 
 
+def _traced(
+    name: str,
+) -> Callable[
+    [Callable[Concatenate[GatewayService, _P], _R]],
+    Callable[Concatenate[GatewayService, _P], _R],
+]:
+    """Run an enforcement call inside one span, so its detectors nest under it."""
+
+    def wrap(
+        method: Callable[Concatenate[GatewayService, _P], _R],
+    ) -> Callable[Concatenate[GatewayService, _P], _R]:
+        @wraps(method)
+        def traced(self: GatewayService, /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+            with self._tracer.start_as_current_span(name):
+                return method(self, *args, **kwargs)
+
+        return traced
+
+    return wrap
+
+
 class GatewayService:
     def __init__(
         self,
@@ -84,8 +113,10 @@ class GatewayService:
         inspectors: tuple[ContentInspector, ...] | None = None,
         clock: Callable[[], float] = monotonic,
         vault: PseudonymVault | None = None,
+        tracer_provider: trace.TracerProvider | None = None,
     ) -> None:
         self.settings = settings
+        self._tracer = tracer_for(tracer_provider)
         self.approvals = approvals
         self.audit = audit
         self.policy: PolicyEngine = policy or LocalPolicyEngine(settings)
@@ -110,6 +141,7 @@ class GatewayService:
         self.decisions = DecisionLog(settings.decision_log_size)
         self.incidents = IncidentStore(settings.incident_store_size)
 
+    @_traced("guardrail.inspect_content")
     def inspect_content(
         self,
         request: ContentInspectionRequest,
@@ -186,6 +218,7 @@ class GatewayService:
                 reason = output_reason
         return decide(verdict, reason, evidence, transformed)
 
+    @_traced("guardrail.inspect_context_batch")
     def inspect_context_batch(
         self, request: ContextBatchRequest, principal: Principal
     ) -> ContextBatchDecision:
@@ -344,6 +377,7 @@ class GatewayService:
                 reason = "restricted_read_only_mode"
         return verdict, reason, findings
 
+    @_traced("guardrail.inspect_action")
     def inspect_action(
         self, request: ActionInspectionRequest, principal: Principal
     ) -> SecurityDecision:
@@ -440,7 +474,17 @@ class GatewayService:
 
         findings: list[Finding] = []
         for inspector in self.inspectors:
-            findings.extend(inspector.inspect(content))
+            detector = type(inspector).__name__
+            started = perf_counter()
+            with self._tracer.start_as_current_span(
+                "guardrail.detector", attributes={"guardrail.detector": detector}
+            ):
+                try:
+                    findings.extend(inspector.inspect(content))
+                finally:
+                    # A detector that failed still took time, and a slow
+                    # failure is exactly what the latency metric must show.
+                    self.metrics.observe_detector(detector, perf_counter() - started)
         return findings
 
     def _transformed(
@@ -481,6 +525,7 @@ class GatewayService:
         self.audit.publish(decision)
         self.decisions.record(decision)
         self.metrics.observe(decision)
+        record_decision(decision)
         if decision.reason_code == "canary_leak_detected":
             self._open_canary_incident(decision)
         return decision

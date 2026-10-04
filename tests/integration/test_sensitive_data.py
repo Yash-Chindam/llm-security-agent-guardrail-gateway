@@ -152,7 +152,8 @@ def test_restoration_is_audited_without_the_values(
         )
 
     events = transport.snapshot()
-    assert events[-1] == {
+    envelope = {"event_id", "schema_version", "occurred_at"}
+    assert {k: v for k, v in events[-1].items() if k not in envelope} == {
         "enforcement_point": "operation",
         "verdict": "allow",
         "reason_code": "pseudonyms_restored",

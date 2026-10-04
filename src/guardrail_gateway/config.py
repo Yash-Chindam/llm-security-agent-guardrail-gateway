@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     decision_log_size: int = Field(default=10_000, ge=10, le=1_000_000)
     incident_store_size: int = Field(default=5_000, ge=10, le=1_000_000)
 
+    # Section 14. Publish audit events to Kafka when set; otherwise they stay
+    # in process. Client settings such as TLS and SASL are passed through.
+    kafka_bootstrap_servers: str | None = Field(default=None, min_length=1)
+    kafka_topic: str = Field(default="guardrail.security-events", pattern=r"^[A-Za-z0-9._-]+$")
+    kafka_client_config: dict[str, str | int | bool] = Field(default_factory=dict)
+    # Sections 17 and 18. Export decision traces to an OTLP/HTTP collector.
+    otlp_endpoint: str | None = Field(default=None, pattern=r"^https?://")
+
     # Section 15. When audit is mandatory, enforcement blocks once the outage
     # buffer is full; otherwise events beyond the bound are counted and dropped.
     audit_mandatory: bool = True

@@ -9,10 +9,15 @@ once mandatory audit durability can no longer be met.
 from __future__ import annotations
 
 from collections import deque
+from datetime import UTC, datetime
 from threading import RLock
 from typing import Any, Protocol
+from uuid import uuid4
 
 from guardrail_gateway.models import SecurityDecision
+
+# Bumped when a field is removed or changes meaning, so a consumer can tell.
+EVENT_SCHEMA_VERSION = 1
 
 
 class TransportUnavailableError(Exception):
@@ -145,7 +150,21 @@ class AuditSink:
             }
         )
 
+    @property
+    def in_flight(self) -> int:
+        """Events handed to the transport that it has not yet confirmed."""
+
+        return int(getattr(self._transport, "in_flight", 0))
+
     def _deliver(self, event: dict[str, Any]) -> None:
+        # Stamped when the decision was made, not when a recovering transport
+        # finally accepts it, so an outage does not rewrite the timeline.
+        event = {
+            "event_id": str(uuid4()),
+            "schema_version": EVENT_SCHEMA_VERSION,
+            "occurred_at": datetime.now(UTC).isoformat(timespec="milliseconds"),
+            **event,
+        }
         with self._lock:
             self._flush()
             # Never overtake buffered events: delivery order is audit order.
