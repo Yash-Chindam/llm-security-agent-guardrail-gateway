@@ -315,3 +315,4 @@ class HealthResponse(BaseModel):
     identity_verification: str = "configured"
     audit: str = "durable"
     stores: str = "available"
+    policy: str = "available"

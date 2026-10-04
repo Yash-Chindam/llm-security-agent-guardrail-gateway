@@ -71,6 +71,36 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: pytest tests/unit/test_stores.py --no-cov -k postgres
 
+  # The Rego bundle has its own tests, and it must decide exactly as the
+  # built-in policy does. Both are checked against a real OPA: its unit tests,
+  # then the parity matrix and the whole adversarial suite with OPA deciding.
+  opa:
+    name: opa
+    runs-on: ubuntu-latest
+    env:
+      OPA_IMAGE: openpolicyagent/opa:1.9.0-static
+      GUARDRAIL_TEST_OPA_URL: http://127.0.0.1:8181
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Rego unit tests
+        run: docker run --rm -v "$PWD/deploy/opa/policy:/policy:ro" "$OPA_IMAGE" test /policy -v
+      - name: Start OPA with the bundle
+        run: |
+          docker run -d --name opa -p 8181:8181 -v "$PWD/deploy/opa/policy:/policy:ro" \
+            "$OPA_IMAGE" run --server --addr 0.0.0.0:8181 --bundle /policy
+          for attempt in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8181/health && exit 0
+            sleep 1
+          done
+          docker logs opa
+          exit 1
+      - run: pytest tests/integration/test_opa_policy.py --no-cov
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest
@@ -152,7 +182,7 @@ jobs:
 
   release-bundle:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [unit, integration, postgres, coverage, e2e, security, container]
+    needs: [unit, integration, postgres, opa, coverage, e2e, security, container]
     uses: ./.github/workflows/release-bundle.yml
     with:
       ref: ${{ github.sha }}

@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str | None = Field(default=None, min_length=1)
     kafka_topic: str = Field(default="guardrail.security-events", pattern=r"^[A-Za-z0-9._-]+$")
     kafka_client_config: dict[str, str | int | bool] = Field(default_factory=dict)
+    # Section 7. Ask an Open Policy Agent server for every decision instead of
+    # the built-in policy. The timeout is short: a decision is on the request
+    # path, and a slow policy engine is treated as an unavailable one.
+    opa_url: str | None = Field(default=None, pattern=r"^https?://")
+    opa_timeout_seconds: float = Field(default=1.0, gt=0, le=10)
     # Section 14. Keep approvals and incident cases in PostgreSQL, or in a
     # SQLite file for one node. Unset, they live in memory and are lost on
     # restart. The URL may hold a password, so it is never logged.
