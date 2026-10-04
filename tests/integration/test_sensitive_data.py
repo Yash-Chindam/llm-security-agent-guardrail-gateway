@@ -24,7 +24,7 @@ pytestmark = pytest.mark.integration
 
 TRACE = "33333333-3333-4333-8333-333333333333"
 OTHER_TRACE = "44444444-4444-4444-8444-444444444444"
-CANARY = "canary-7f3a9c2e1b5d"
+CANARY = "canary-fixture-not-a-secret"
 TICKET = "Customer casey@example.com (backup casey@example.com) called from +1 (212) 555-0100."
 
 
@@ -222,7 +222,7 @@ def test_a_canary_is_denied_at_every_enforcement_point(
         body = client.post(
             f"/v1/inspect/{path}",
             headers=caller_auth,
-            json=_body(f"config dump token={CANARY}", trust_level="trusted"),
+            json=_body(f"config dump marker {CANARY}", trust_level="trusted"),
         ).json()
 
     assert (body["verdict"], body["reason_code"]) == ("deny", "canary_leak_detected")
@@ -230,7 +230,7 @@ def test_a_canary_is_denied_at_every_enforcement_point(
 
 
 def test_an_encoded_canary_is_still_a_leak(settings: Settings, caller_auth: dict[str, str]) -> None:
-    encoded = base64.b64encode(f"token={CANARY}".encode()).decode()
+    encoded = base64.b64encode(f"marker {CANARY}".encode()).decode()
 
     with _gateway(settings, canary_secrets=(SecretStr(CANARY),)) as client:
         body = client.post(

@@ -252,6 +252,35 @@ half-enforced. The built-in adapters run in process; `create_app` accepts a
 
 `/health/ready` reports `audit` as `durable`, `buffering`, or `blocked`.
 
+## Audit, incidents, and metrics
+
+Every decision is kept in a bounded decision log (`GUARDRAIL_DECISION_LOG_SIZE`)
+exactly as it was returned to the caller: redacted evidence, no raw content.
+
+| Endpoint | Roles | Purpose |
+|---|---|---|
+| `GET /v1/decisions/{decision_id}` | `auditor`, `reviewer` | One decision and its evidence. |
+| `GET /v1/decisions?trace_id=...` | `auditor`, `reviewer` | Every decision made for a trace. |
+| `POST /v1/approvals/{approval_id}/reject` | `reviewer` | Refuse a proposed action. A rejection is final: it cannot be approved afterwards or consumed. |
+| `POST /v1/incidents` | `reviewer` | Open a case citing one or more decisions, with a severity. |
+| `GET /v1/incidents`, `GET /v1/incidents/{incident_id}` | `auditor`, `reviewer` | Read the tenant's cases. |
+| `PATCH /v1/incidents/{incident_id}` | `reviewer` | Set status, disposition (`true_positive`, `false_positive`, `benign`), and remediation. |
+
+All of these are scoped to the caller's tenant. Another tenant's decision,
+approval, or incident is reported as missing, and an incident may only cite
+decisions the caller's tenant can read. A canary sighting opens a `critical`
+incident on its own; further sightings in the same trace join that case.
+
+`GET /metrics` serves the Prometheus exposition format: decisions by
+enforcement point, verdict, and reason code; a decision-latency histogram;
+credential rejections; approvals by status; audit events pending and dropped;
+and open incidents. Tenant and identity are never labels. The endpoint is
+unauthenticated like the health probes, so expose it to the scraper only.
+
+The decision log, incident store, and approval store are in memory and per
+process. Durable PostgreSQL adapters are tracked in
+[`docs/implementation-status.md`](docs/implementation-status.md).
+
 ## Test layers
 
 ```bash
@@ -334,7 +363,9 @@ workflow directly for the merge commit it creates.
 - Patch/minor Dependabot updates receive the `automerge` label; major updates
   always require manual review.
 - A label-gated merge workflow waits for the complete `CI` workflow, verifies
-  that the successful run tested the PR's current head SHA, and preserves the
+  that the successful run tested the PR's current head SHA, then waits for
+  every other check on that commit (for example external secret scanning) and
+  refuses to merge over one that failed or is still running. It preserves the
   PR's individual commits with a merge commit.
 
 Apply `automerge` manually to other PRs only when they are ready to merge after

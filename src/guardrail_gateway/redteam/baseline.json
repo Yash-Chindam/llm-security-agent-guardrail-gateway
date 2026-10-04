@@ -1,6 +1,8 @@
 {
-  "suite_version": "2026-10-03.6",
+  "suite_version": "2026-10-03.7",
   "blocked_scenarios": [
+    "approval-rejected-then-approved",
+    "approval-rejected-then-replayed",
     "approval-replay-different-action",
     "approval-reuse-after-consumption",
     "approval-without-reviewer-role",

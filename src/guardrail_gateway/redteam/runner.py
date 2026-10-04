@@ -159,7 +159,7 @@ def _path_for(probe: Probe, approvals: dict[int, str]) -> str | None:
     approval_id = approvals.get(probe.approve_target)
     if approval_id is None:
         return None
-    return APPROVE_PATH.format(approval_id=approval_id)
+    return probe.path.format(approval_id=approval_id)
 
 
 def _payload_for(probe: Probe, approvals: dict[int, str]) -> dict[str, Any]:
