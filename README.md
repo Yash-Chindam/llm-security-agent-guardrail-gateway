@@ -453,6 +453,39 @@ has a column, and every metric a panel or alert names is one the gateway
 exports. The adapter was also run against a real Kafka broker by hand; no
 broker, ClickHouse, or Grafana instance runs in CI.
 
+## Running the whole topology
+
+[`deploy/compose`](deploy/compose) runs the gateway with everything it
+integrates with: OPA with the policy bundle, PostgreSQL for approvals and
+incidents, Kafka, ClickHouse consuming the event topic, Prometheus with the
+alert rules, and Grafana with the dashboard.
+
+```bash
+cp deploy/compose/.env.example deploy/compose/.env
+```
+
+Set every value in `.env`. No credential is written in the compose file, and a
+preflight step stops the stack from starting while any is missing. Then:
+
+```bash
+docker compose -f deploy/compose/docker-compose.yml up --build --wait
+```
+
+The gateway is on `127.0.0.1:8000` and Grafana on `127.0.0.1:3000`. Nothing
+else is published, and the stores and event pipeline sit on a network with no
+route out. The gateway, OPA, Prometheus, and Grafana run with a read-only
+filesystem and no capabilities.
+
+[`smoke_test.py`](deploy/compose/smoke_test.py) drives the running stack and
+follows each decision through every service: OPA decides, the approval is
+consumed once in PostgreSQL, the events reach ClickHouse through Kafka without
+any content, Prometheus scrapes the gateway, and Grafana has the dashboard. CI
+runs it on every pull request.
+
+This is one host with one replica of everything, no TLS between services, and
+no edge proxy. It shows the pieces working together; it is not a production
+layout. Presidio, Loki, Tempo, and an Envoy or Kong edge are not included.
+
 ## Test layers
 
 ```bash
