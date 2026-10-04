@@ -232,6 +232,11 @@ _ARGUMENTS: dict[str, list[dict[str, Any]]] = {
     ],
     "update_record": [{"record_id": "1"}, {"record_id": "1; DROP"}],
     "delete_record": [{"record_id": "9"}, {}],
+    "run_code": [
+        {"language": "python", "code": "print(1)"},
+        {"language": "python", "code": "print(1)", "network": True},
+        {"language": "bash", "code": "id"},
+    ],
     "run_shell": [{"command": "id"}],
 }
 _ROLE_SETS = [
