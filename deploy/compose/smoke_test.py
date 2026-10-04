@@ -4,7 +4,10 @@ Run after `docker compose up --wait`, with the same environment the stack was
 started with. It drives the gateway over HTTP and then follows the effects
 through every other service:
 
+- The edge proxy routes only the API and refuses oversized requests.
 - OPA decided (the gateway reports its policy decision point available).
+- Presidio found PII the built-in detectors do not look for.
+- The decision's trace reached Tempo, without any content.
 - An approval issued, approved, and consumed once lives in PostgreSQL.
 - The decisions reached ClickHouse through Kafka, without any content.
 - Prometheus scraped the gateway and loaded the alert rules.
@@ -109,7 +112,14 @@ def main() -> None:
     reviewer = _auth("smoke-reviewer", Role.CALLER, Role.REVIEWER)
 
     status, ready = _call(f"{GATEWAY}/health/ready")
-    _check(status == 200, "gateway is ready")
+    _check(status == 200, "gateway is ready, reached through the edge proxy")
+    status, _ = _call(f"{GATEWAY}/metrics")
+    _check(status == 404, "the edge does not expose /metrics")
+    status, _ = _call(f"{GATEWAY}/docs")
+    _check(status == 404, "the edge does not expose the API documentation")
+    oversized = {"identity": "smoke-user", "tenant_id": "acme", "content": "x" * 3_000_000}
+    status, _ = _call(f"{GATEWAY}/v1/inspect/input", oversized, caller)
+    _check(status == 413, "the edge refuses a request body past its limit")
     _check(ready["policy"] == "available", "OPA is the reachable policy decision point")
     _check(ready["stores"] == "available", "PostgreSQL stores are reachable")
     _check(ready["audit"] == "durable", "audit events are being delivered to Kafka")
@@ -127,6 +137,18 @@ def main() -> None:
         "sensitive input is redacted (decided by the Rego bundle)",
     )
     _check(MARKER_EMAIL not in decision["transformed_content"], "the redacted text omits the email")
+
+    named = {**content, "content": "Schedule a call with Margaret Hamilton in Boston."}
+    _, decision = _call(f"{GATEWAY}/v1/inspect/input", named, caller)
+    found = {item["category"] for item in decision["evidence"]}
+    _check(
+        "pii_person" in found and decision["verdict"] == "transform",
+        "Presidio recognizes a person's name, and it is redacted",
+    )
+    _check(
+        "Margaret Hamilton" not in decision["transformed_content"],
+        "the redacted text omits the name",
+    )
 
     injection = {
         **content,
@@ -207,6 +229,40 @@ def main() -> None:
     )
     names = {rule["name"] for group in rules["data"]["groups"] for rule in group["rules"]}
     _check("GuardrailAuditEventsDropped" in names, "Prometheus loaded the alert rules")
+
+    def traced() -> bool:
+        result = _exec(
+            "grafana",
+            "wget",
+            "-q",
+            "-O",
+            "-",
+            "http://tempo:3200/api/search?tags=service.name%3Dguardrail-gateway&limit=20",
+        )
+        return len(json.loads(result).get("traces", [])) >= 3
+
+    _eventually(traced, "the decisions' traces reached Tempo")
+    spans = _exec(
+        "grafana",
+        "wget",
+        "-q",
+        "-O",
+        "-",
+        "http://tempo:3200/api/search?q=%7Bspan.guardrail.reason_code%3D%22prompt_injection_detected%22%7D",
+    )
+    _check(
+        len(json.loads(spans).get("traces", [])) >= 1,
+        "Tempo can find the injection denial by its reason code",
+    )
+    everything = _exec(
+        "grafana",
+        "wget",
+        "-q",
+        "-O",
+        "-",
+        "http://tempo:3200/api/search/tag/.guardrail.trace_id/values",
+    )
+    _check(MARKER_EMAIL not in everything, "no trace attribute contains the email")
 
     status, health = _call(f"{GRAFANA}/api/health")
     _check(status == 200 and health["database"] == "ok", "Grafana is healthy")

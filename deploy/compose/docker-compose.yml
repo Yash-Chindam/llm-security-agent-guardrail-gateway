@@ -5,8 +5,9 @@
 #   cp deploy/compose/.env.example deploy/compose/.env   # then set the values
 #   docker compose -f deploy/compose/docker-compose.yml up --build --wait
 #
-# Only the gateway and Grafana are reachable from the host, and only on
-# loopback. Everything else lives on a network with no route out.
+# Only the edge proxy and Grafana are reachable from the host, and only on
+# loopback. The gateway is reached through the edge; everything else lives on
+# a network with no route out.
 name: guardrail
 
 x-hardened: &hardened
@@ -56,16 +57,61 @@ services:
       - GUARDRAIL_JWT_AUDIENCE=${GUARDRAIL_JWT_AUDIENCE:-guardrail-gateway}
       - GUARDRAIL_OPA_URL=http://opa:8181
       - GUARDRAIL_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - GUARDRAIL_PRESIDIO_URL=http://presidio:3000
+      - GUARDRAIL_PRESIDIO_TIMEOUT_SECONDS=10
+      - GUARDRAIL_OTLP_ENDPOINT=http://tempo:4318/v1/traces
     tmpfs:
       - /tmp:size=16m
-    ports:
-      - "127.0.0.1:${GATEWAY_PORT:-8000}:8000"
-    networks: [edge, internal]
+    networks: [internal]
     depends_on:
       preflight: {condition: service_completed_successfully}
       opa: {condition: service_healthy}
       postgres: {condition: service_healthy}
       kafka: {condition: service_healthy}
+      presidio: {condition: service_healthy}
+      tempo: {condition: service_started}
+
+  # The only way in. See envoy.yaml for what it lets through.
+  edge:
+    <<: *hardened
+    image: envoyproxy/envoy:v1.35.3
+    command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    user: "101:101"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    tmpfs:
+      - /tmp:size=16m
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8000}:8080"
+    networks: [public, internal]
+    depends_on:
+      gateway: {condition: service_healthy}
+
+  # PII recognition inside the trusted boundary: content never leaves it.
+  presidio:
+    image: mcr.microsoft.com/presidio-analyzer:2.2.360
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      - PORT=3000
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 20s
+
+  tempo:
+    <<: *hardened
+    image: grafana/tempo:2.8.2
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+    tmpfs:
+      - /var/tempo:uid=10001,gid=10001,size=256m
+    networks: [internal]
 
   opa:
     <<: *hardened
@@ -185,12 +231,12 @@ services:
       - /tmp:size=64m
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - ./grafana-datasource.yml:/etc/grafana/provisioning/datasources/guardrail.yml:ro
       - ../grafana/provisioning/dashboards.yml:/etc/grafana/provisioning/dashboards/guardrail.yml:ro
       - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
-    networks: [edge, internal]
+    networks: [public, internal]
     depends_on:
       preflight: {condition: service_completed_successfully}
       prometheus: {condition: service_healthy}
@@ -201,7 +247,7 @@ services:
       retries: 24
 
 networks:
-  edge: {}
+  public: {}
   # No route to the outside: the stores and the event pipeline can talk to each
   # other and to the gateway, and to nothing else.
   internal:

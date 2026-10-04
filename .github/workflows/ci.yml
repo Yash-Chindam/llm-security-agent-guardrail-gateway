@@ -145,7 +145,7 @@ jobs:
           print(f"POSTGRES_PASSWORD={database}")
           print("GUARDRAIL_DATABASE_URL=" + "postgresql://gateway:" + database + "@postgres:5432/gateway")
           PY
-      - run: docker compose up --build --wait --wait-timeout 300
+      - run: docker compose up --build --wait --wait-timeout 480
       - run: python deploy/compose/smoke_test.py
       - if: ${{ failure() }}
         run: docker compose logs --tail 80
