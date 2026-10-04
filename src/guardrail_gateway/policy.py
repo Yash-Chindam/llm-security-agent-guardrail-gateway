@@ -26,6 +26,7 @@ from guardrail_gateway.tools import (
     ExecuteSqlArguments,
     FetchUrlArguments,
     ReadFileArguments,
+    RunCodeArguments,
     path_violation,
     sql_violation,
     url_violation,
@@ -132,6 +133,13 @@ def argument_violation(request: ActionInspectionRequest, limits: ActionPolicyCon
         return path_violation(arguments.path, limits)
     if isinstance(arguments, FetchUrlArguments):
         return url_violation(arguments.url, limits)
+    if (
+        isinstance(arguments, RunCodeArguments)
+        and arguments.network
+        and request.side_effect is not SideEffect.EXTERNAL
+    ):
+        # Network access declared as having no side effect would skip review.
+        return "network_requires_approval"
     return None
 
 

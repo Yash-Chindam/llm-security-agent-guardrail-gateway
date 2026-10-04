@@ -152,6 +152,20 @@ class ActionInspectionRequest(BaseModel):
     approval_token: UUID | None = None
 
 
+class SandboxResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # None when the run was killed before it could exit on its own.
+    exit_code: int | None
+    stdout: str
+    stderr: str
+    timed_out: bool = False
+    # True when output passed the limit and the run was stopped for it.
+    output_truncated: bool = False
+    network: bool = False
+    duration_ms: float = Field(ge=0)
+
+
 class SecurityDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -170,6 +184,15 @@ class SecurityDecision(BaseModel):
     # Where the content may be sent, when policy constrains it.
     route: str | None = None
     latency_ms: float = Field(ge=0)
+
+
+class ExecutionResponse(BaseModel):
+    """The decision on a code action, and its result when it was allowed to run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: SecurityDecision
+    result: SandboxResult | None = None
 
 
 class DocumentDecision(BaseModel):

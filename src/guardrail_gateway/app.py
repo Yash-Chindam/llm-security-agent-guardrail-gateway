@@ -34,6 +34,7 @@ from guardrail_gateway.models import (
     ContextBatchDecision,
     ContextBatchRequest,
     EnforcementPoint,
+    ExecutionResponse,
     HealthResponse,
     IncidentCase,
     IncidentOpenRequest,
@@ -46,6 +47,7 @@ from guardrail_gateway.models import (
 from guardrail_gateway.opa import OpaPolicyEngine
 from guardrail_gateway.policy import PolicyEngine, policy_available
 from guardrail_gateway.presidio import PresidioInspector
+from guardrail_gateway.sandbox import Sandbox, build_sandbox
 from guardrail_gateway.sensitive import PseudonymVault
 from guardrail_gateway.service import GatewayService
 from guardrail_gateway.stores import (
@@ -54,6 +56,7 @@ from guardrail_gateway.stores import (
     StoreUnavailableError,
     open_database,
 )
+from guardrail_gateway.tools import CODE_TOOL
 from guardrail_gateway.tracing import build_provider
 
 
@@ -105,6 +108,7 @@ def create_app(
     tracer_provider: TracerProvider | None = None,
     approvals: ApprovalRepository | None = None,
     incidents: IncidentRepository | None = None,
+    sandbox: Sandbox | None = None,
 ) -> FastAPI:
     """Build the gateway; the keyword adapters replace the in-process defaults."""
 
@@ -151,6 +155,7 @@ def create_app(
         vault=vault,
         tracer_provider=tracer_provider,
         incidents=incidents,
+        sandbox=sandbox or build_sandbox(runtime_settings),
     )
     verifier = IdentityVerifier(runtime_settings)
 
@@ -163,7 +168,7 @@ def create_app(
     application = FastAPI(
         lifespan=lifespan,
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.13.0",
+        version="0.14.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service
@@ -259,6 +264,25 @@ def create_app(
         principal: PrincipalDependency,
     ) -> SecurityDecision:
         return gateway.inspect_action(request, principal)
+
+    @application.post("/v1/actions/execute", response_model=ExecutionResponse, tags=["action"])
+    def execute_action(
+        request: ActionInspectionRequest,
+        gateway: GatewayDependency,
+        principal: PrincipalDependency,
+    ) -> ExecutionResponse:
+        # The gateway runs one thing itself: code, in the sandbox. Every other
+        # tool is executed by the application that asked for the decision.
+        if request.tool != CODE_TOOL:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="tool_not_executable"
+            )
+        outcome = gateway.execute(request, principal)
+        if outcome is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="sandbox_unavailable"
+            )
+        return outcome
 
     @application.post(
         "/v1/pseudonyms/restore", response_model=PseudonymRestoreResponse, tags=["pseudonyms"]

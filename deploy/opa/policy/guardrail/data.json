@@ -39,6 +39,15 @@
         "operator"
       ]
     },
+    "run_code": {
+      "effects": [
+        "external",
+        "none"
+      ],
+      "roles": [
+        "operator"
+      ]
+    },
     "search_documents": {
       "effects": [
         "none",

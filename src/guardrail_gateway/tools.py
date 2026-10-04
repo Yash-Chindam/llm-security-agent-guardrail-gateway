@@ -4,8 +4,8 @@ Section 11 of the design specification puts an action broker between the agent
 and its tools: an allowlist, strict argument schemas, canonical filesystem
 paths and URLs, and parsed SQL restricted to a query class. Section 8.4 adds
 user and service authorization. A tool that is not registered here cannot be
-proposed at all, and shell execution is deliberately absent because arbitrary
-code execution on the host is out of scope.
+proposed at all. There is no shell tool: the only way to run code is
+`run_code`, which runs in the ephemeral sandbox and never on the host.
 """
 
 from __future__ import annotations
@@ -70,6 +70,14 @@ class FetchUrlArguments(_Arguments):
     method: Literal["GET"] = "GET"
 
 
+class RunCodeArguments(_Arguments):
+    language: Literal["python"]
+    code: str = Field(min_length=1, max_length=20_000)
+    # Asking for network access makes the run an external side effect, which
+    # needs a reviewer's approval of this exact code.
+    network: bool = False
+
+
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
     """What a registered tool may do and who may propose it."""
@@ -94,7 +102,12 @@ TOOLS: dict[str, ToolSpec] = {
     "delete_record": ToolSpec(
         frozenset({SideEffect.DESTRUCTIVE}), DeleteRecordArguments, _OPERATORS
     ),
+    "run_code": ToolSpec(
+        frozenset({SideEffect.NONE, SideEffect.EXTERNAL}), RunCodeArguments, _OPERATORS
+    ),
 }
+
+CODE_TOOL = "run_code"
 
 
 @dataclass(frozen=True, slots=True)

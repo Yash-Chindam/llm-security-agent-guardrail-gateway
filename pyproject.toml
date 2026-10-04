@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "guardrail-gateway"
-version = "0.13.0"
+version = "0.14.0"
 description = "Policy-aware security gateway for LLM and agent workflows"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -66,7 +66,8 @@ select = ["E", "F", "I", "N", "S", "UP", "B", "SIM", "RUF"]
 # Test layers assert, and they carry signing material for a throwaway gateway.
 # Bandit already excludes tests entirely; Trivy and secret scanning still cover
 # the whole tree for credentials that look real.
-"tests/**/*.py" = ["S101", "S105", "S106"]
+# The sandbox tests start local processes with fixed argument vectors.
+"tests/**/*.py" = ["S101", "S105", "S106", "S603", "S607"]
 
 [tool.mypy]
 python_version = "3.11"

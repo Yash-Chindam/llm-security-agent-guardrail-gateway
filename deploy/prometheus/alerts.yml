@@ -46,6 +46,14 @@ groups:
           summary: The approval and incident store is unreachable.
           description: Actions that need approval are being denied until the database returns.
 
+      - alert: GuardrailSandboxUnavailable
+        expr: sum(rate(guardrail_sandbox_runs_total{outcome="unavailable"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Code runs are being refused because no sandbox can start.
+
       - alert: GuardrailDependencyUnavailable
         expr: >-
           sum(rate(guardrail_decisions_total{reason_code=~"policy_engine_unavailable|content_inspection_unavailable|audit_durability_unavailable"}[5m])) > 0

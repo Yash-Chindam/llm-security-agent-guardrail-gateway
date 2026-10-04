@@ -81,6 +81,7 @@ def _exported_metrics() -> set[str]:
     metrics.observe(_decision())
     metrics.observe_detector("DeterministicInspector", 0.001)
     metrics.observe_rejection("missing_credential")
+    metrics.observe_sandbox_run("completed")
     exposition = metrics.render(lambda: dict.fromkeys(ApprovalStatus, 0), 0, 0, lambda: 0).decode()
     return set(_METRIC.findall(exposition))
 

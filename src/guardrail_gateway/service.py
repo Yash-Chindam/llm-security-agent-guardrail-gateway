@@ -41,6 +41,7 @@ from guardrail_gateway.models import (
     DetectorEvidence,
     DocumentDecision,
     EnforcementPoint,
+    ExecutionResponse,
     OutputInspectionRequest,
     PseudonymRestoreRequest,
     PseudonymRestoreResponse,
@@ -57,6 +58,7 @@ from guardrail_gateway.policy import (
     PolicyEngineUnavailableError,
     action_digest,
 )
+from guardrail_gateway.sandbox import Sandbox, SandboxUnavailableError
 from guardrail_gateway.sensitive import (
     InMemoryPseudonymVault,
     PseudonymVault,
@@ -117,9 +119,11 @@ class GatewayService:
         vault: PseudonymVault | None = None,
         tracer_provider: trace.TracerProvider | None = None,
         incidents: IncidentRepository | None = None,
+        sandbox: Sandbox | None = None,
     ) -> None:
         self.settings = settings
         self._tracer = tracer_for(tracer_provider)
+        self.sandbox = sandbox
         self.approvals = approvals
         self.audit = audit
         self.policy: PolicyEngine = policy or LocalPolicyEngine(settings)
@@ -454,6 +458,44 @@ class GatewayService:
                 return decide(Verdict.DENY, "approval_store_unavailable", digest)
 
         return decide(verdict, reason, digest, approval_id)
+
+    def execute(
+        self, request: ActionInspectionRequest, principal: Principal
+    ) -> ExecutionResponse | None:
+        """Decide a code action and, only if it is allowed, run it in the sandbox.
+
+        Returns None when no sandbox can take the run. That is checked before
+        the decision, so an approval is never spent on code that cannot run.
+        """
+
+        if self.sandbox is None or not self.sandbox.available():
+            self.metrics.observe_sandbox_run("unavailable")
+            return None
+        decision = self.inspect_action(request, principal)
+        if decision.verdict is not Verdict.ALLOW:
+            return ExecutionResponse(decision=decision)
+        network = request.arguments.get("network") is True
+        try:
+            result = self.sandbox.run(str(request.arguments["code"]), network)
+        except SandboxUnavailableError:
+            self.metrics.observe_sandbox_run("unavailable")
+            return None
+        outcome = (
+            "timed_out"
+            if result.timed_out
+            else "output_limit"
+            if result.output_truncated
+            else "completed"
+            if result.exit_code == 0
+            else "failed"
+        )
+        self.metrics.observe_sandbox_run(outcome)
+        # What ran is identified by the decision's digest; the code and its
+        # output are never written to the audit trail.
+        self.audit.publish_operation(
+            f"code_execution_{outcome}", principal.tenant_id, str(request.trace_id), 1
+        )
+        return ExecutionResponse(decision=decision, result=result)
 
     def _model_eligible(self, model: str | None) -> bool:
         """A named model must be one the deployment permits, when it restricts them."""

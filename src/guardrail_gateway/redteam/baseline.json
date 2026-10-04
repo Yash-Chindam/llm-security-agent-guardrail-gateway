@@ -1,5 +1,5 @@
 {
-  "suite_version": "2026-10-03.7",
+  "suite_version": "2026-10-04.1",
   "blocked_scenarios": [
     "approval-rejected-then-approved",
     "approval-rejected-then-replayed",
@@ -40,6 +40,9 @@
     "resource-exhaustion-oversized-input",
     "resource-exhaustion-runaway-tool-loop",
     "role-escalation-destructive-tool",
+    "sandbox-code-without-operator-role",
+    "sandbox-network-declared-as-no-side-effect",
+    "sandbox-shell-language",
     "self-approval-attempt",
     "sensitive-data-extraction-output",
     "single-turn-jailbreak-roleplay",
@@ -69,6 +72,7 @@
     "benign-product-question",
     "benign-read-only-sql",
     "benign-reviewer-approves-another-identity",
+    "benign-sandboxed-calculation",
     "benign-sql-keyword-inside-literal",
     "benign-structured-output",
     "benign-support-ticket-with-email",
