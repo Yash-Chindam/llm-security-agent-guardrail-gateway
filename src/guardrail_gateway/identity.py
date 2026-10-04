@@ -5,19 +5,24 @@ section 16 requires OIDC/OAuth identity. The gateway therefore never trusts an
 identity asserted in a request body: the principal is derived from a signed
 bearer token, and any identity the body claims must agree with it.
 
-Verification is local and offline. The deployment supplies the signing material
-(a shared secret for HMAC, or the issuer's public key for RSA), so the gateway
-keeps enforcing while the identity provider is unreachable and fails closed
-when no material is configured at all.
+Verification is local. The signing material is either configured (a shared
+secret for HMAC, or the issuer's public key for RSA) or discovered from an OIDC
+identity provider and followed as its keys rotate. Either way the gateway
+keeps enforcing while the provider is briefly unreachable, and fails closed
+when it has no key it can still trust.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from threading import RLock
+from time import monotonic
 from typing import Any
 
+import httpx
 import jwt
 
 from guardrail_gateway.config import Settings
@@ -74,35 +79,165 @@ class Principal:
         return role in self.roles
 
 
+# After a fetch, how long before an unknown key id may trigger another. A
+# caller can put any key id in a token, so without this every forged token
+# would cost the identity provider a request.
+_MIN_REFRESH_SECONDS = 10.0
+_DISCOVERY_PATH = "/.well-known/openid-configuration"
+
+
+class ProviderKeys:
+    """The identity provider's current signing keys, by key id.
+
+    Keys are fetched on first use, again when the cache expires, and again
+    when a token names a key id that is not known, which is how a rotation is
+    picked up without waiting for the cache. When the provider cannot be
+    reached the last keys stay in use up to the staleness limit.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.Client | None = None,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        self._issuer = settings.oidc_issuer
+        self._jwks_url = settings.jwks_url
+        self._cache_seconds = settings.jwks_cache_seconds
+        self._max_stale_seconds = settings.jwks_max_stale_seconds
+        self._client = client or httpx.Client(timeout=settings.jwks_timeout_seconds)
+        self._clock = clock
+        self._keys: dict[str, Any] = {}
+        self._fetched_at: float | None = None
+        self._attempted_at: float | None = None
+        self._lock = RLock()
+
+    def close(self) -> None:
+        self._client.close()
+
+    def usable(self) -> bool:
+        with self._lock:
+            self._refresh_if_due()
+            return self._trusted()
+
+    def key_for(self, token: str) -> Any:
+        """The public key that should have signed this token."""
+
+        try:
+            header = jwt.get_unverified_header(token)
+        except jwt.InvalidTokenError as error:
+            raise CredentialError(AuthenticationFailure.INVALID) from error
+        key_id = header.get("kid")
+        with self._lock:
+            self._refresh_if_due()
+            if isinstance(key_id, str) and key_id not in self._keys:
+                self._refresh()
+            if not self._trusted():
+                raise CredentialError(AuthenticationFailure.UNAVAILABLE)
+            if isinstance(key_id, str):
+                key = self._keys.get(key_id)
+            else:
+                # A token that names no key is only unambiguous when the
+                # provider publishes exactly one.
+                key = next(iter(self._keys.values())) if len(self._keys) == 1 else None
+        if key is None:
+            raise CredentialError(AuthenticationFailure.INVALID)
+        return key
+
+    def _trusted(self) -> bool:
+        if self._fetched_at is None or not self._keys:
+            return False
+        return self._clock() - self._fetched_at <= self._cache_seconds + self._max_stale_seconds
+
+    def _refresh_if_due(self) -> None:
+        if self._fetched_at is None or self._clock() - self._fetched_at >= self._cache_seconds:
+            self._refresh()
+
+    def _refresh(self) -> None:
+        now = self._clock()
+        if self._attempted_at is not None and now - self._attempted_at < _MIN_REFRESH_SECONDS:
+            return
+        self._attempted_at = now
+        try:
+            keys = self._fetch()
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, jwt.PyJWTError):
+            # The previous keys stay in use until the staleness limit.
+            return
+        if keys:
+            self._keys = keys
+            self._fetched_at = now
+
+    def _fetch(self) -> dict[str, Any]:
+        url = self._jwks_url or self._discover()
+        response = self._client.get(url)
+        response.raise_for_status()
+        keys: dict[str, Any] = {}
+        for entry in response.json()["keys"]:
+            # Only RSA keys published for signing. An encryption key, or a
+            # symmetric one, must never verify a credential.
+            if entry.get("kty") != "RSA" or entry.get("use", "sig") != "sig":
+                continue
+            key_id = entry.get("kid")
+            if isinstance(key_id, str) and key_id:
+                keys[key_id] = jwt.PyJWK.from_dict(entry).key
+        return keys
+
+    def _discover(self) -> str:
+        if self._issuer is None:  # pragma: no cover - settings require one of the two
+            raise ValueError("no issuer")
+        issuer = self._issuer.rstrip("/")
+        response = self._client.get(issuer + _DISCOVERY_PATH)
+        response.raise_for_status()
+        document = response.json()
+        # The document must describe the issuer that was asked for, and may
+        # not send key retrieval over a weaker scheme than discovery used.
+        if str(document["issuer"]).rstrip("/") != issuer:
+            raise ValueError("issuer mismatch")
+        jwks_uri = str(document["jwks_uri"])
+        if issuer.startswith("https://") and not jwks_uri.startswith("https://"):
+            raise ValueError("jwks_uri is not https")
+        return jwks_uri
+
+
 class IdentityVerifier:
     """Turns a bearer credential into a Principal, or refuses with a reason."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, provider: ProviderKeys | None = None) -> None:
         secret = settings.jwt_secret
         self._key = secret.get_secret_value() if secret is not None else None
         self._algorithm = settings.jwt_algorithm
-        self._issuer = settings.jwt_issuer
+        self._issuer = settings.jwt_issuer or settings.oidc_issuer
         self._audience = settings.jwt_audience
+        self._provider = provider
+        if provider is None and (settings.oidc_issuer or settings.jwks_url):
+            self._provider = ProviderKeys(settings)
 
     @property
     def configured(self) -> bool:
         """False when no signing material is available, so nothing can be trusted."""
 
+        if self._provider is not None:
+            return self._provider.usable()
         return bool(self._key)
+
+    def close(self) -> None:
+        if self._provider is not None:
+            self._provider.close()
 
     def verify(self, credential: str | None) -> Principal:
         """Verify an Authorization header value and return its principal."""
 
-        if self._key is None:
+        if self._provider is None and self._key is None:
             # Fail closed: without signing material no identity can be proven,
             # and an unauthenticated caller must never reach an enforcement point.
             raise CredentialError(AuthenticationFailure.UNAVAILABLE)
 
         token = _bearer_token(credential)
-        claims = self._decode(token, self._key)
+        key = self._provider.key_for(token) if self._provider is not None else self._key
+        claims = self._decode(token, key)
         return _principal_from(claims)
 
-    def _decode(self, token: str, key: str) -> dict[str, Any]:
+    def _decode(self, token: str, key: Any) -> dict[str, Any]:
         try:
             decoded: dict[str, Any] = jwt.decode(
                 token,

@@ -109,6 +109,7 @@ def create_app(
     approvals: ApprovalRepository | None = None,
     incidents: IncidentRepository | None = None,
     sandbox: Sandbox | None = None,
+    identity_verifier: IdentityVerifier | None = None,
 ) -> FastAPI:
     """Build the gateway; the keyword adapters replace the in-process defaults."""
 
@@ -157,7 +158,8 @@ def create_app(
         incidents=incidents,
         sandbox=sandbox or build_sandbox(runtime_settings),
     )
-    verifier = IdentityVerifier(runtime_settings)
+    verifier = identity_verifier or IdentityVerifier(runtime_settings)
+    closing.append(verifier.close)
 
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -168,7 +170,7 @@ def create_app(
     application = FastAPI(
         lifespan=lifespan,
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.14.0",
+        version="0.15.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service
