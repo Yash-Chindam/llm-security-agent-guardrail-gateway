@@ -120,6 +120,18 @@ class Settings(BaseSettings):
     jwt_algorithm: Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512"] = "HS256"
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
+    # Section 16. Verify against an OIDC identity provider instead of a
+    # configured key: the issuer's signing keys are discovered and followed as
+    # they rotate. `jwks_url` skips discovery for a provider without it.
+    oidc_issuer: str | None = Field(default=None, pattern=r"^https?://[^\s]+$")
+    jwks_url: str | None = Field(default=None, pattern=r"^https?://[^\s]+$")
+    # How long fetched keys are used before they are fetched again, and how
+    # long they may still be used when the provider cannot be reached. Past
+    # that, a key revoked during the outage could still be trusted, so
+    # verification stops instead.
+    jwks_cache_seconds: int = Field(default=300, ge=10, le=86_400)
+    jwks_max_stale_seconds: int = Field(default=3_600, ge=10, le=604_800)
+    jwks_timeout_seconds: float = Field(default=3.0, gt=0, le=30)
 
     @model_validator(mode="after")
     def _reject_weak_hmac_key(self) -> Self:
@@ -137,6 +149,24 @@ class Settings(BaseSettings):
                 f"jwt_secret must be at least {MINIMUM_HMAC_KEY_BYTES} bytes "
                 f"for {self.jwt_algorithm}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _keep_provider_keys_asymmetric(self) -> Self:
+        if self.oidc_issuer is None and self.jwks_url is None:
+            return self
+        if self.jwt_algorithm.startswith("HS"):
+            # A provider publishes public keys. Verifying an HMAC token with
+            # one would let anyone who can read the key forge a credential.
+            raise ValueError("an identity provider needs an RS256, RS384, or RS512 jwt_algorithm")
+        if self.jwt_secret is not None:
+            raise ValueError("configure jwt_secret or an identity provider, not both")
+        if self.jwt_audience is None:
+            # Without an audience, a token the provider issued for any other
+            # application would be accepted here.
+            raise ValueError("an identity provider needs jwt_audience")
+        if self.jwt_issuer is None and self.oidc_issuer is None:
+            raise ValueError("jwks_url needs jwt_issuer")
         return self
 
     @model_validator(mode="after")

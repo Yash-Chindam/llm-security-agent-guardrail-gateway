@@ -59,6 +59,36 @@ verifier accepts the issuer's asymmetric keys today; discovery and key rotation
 against a live provider are tracked in
 [`docs/implementation-status.md`](docs/implementation-status.md).
 
+### Identity provider
+
+Instead of a configured key, the gateway can verify tokens against an OIDC
+identity provider such as Keycloak and follow its keys as they rotate.
+
+| Setting | Effect |
+|---|---|
+| `GUARDRAIL_OIDC_ISSUER` | Discover the provider's signing keys from `<issuer>/.well-known/openid-configuration`. Also the issuer tokens must carry. |
+| `GUARDRAIL_JWKS_URL` | Fetch keys from this URL directly, for a provider without discovery. Needs `GUARDRAIL_JWT_ISSUER`. |
+| `GUARDRAIL_JWT_AUDIENCE` | Required with a provider, so a token issued for another application is refused. |
+| `GUARDRAIL_JWT_ALGORITHM` | Must be `RS256`, `RS384`, or `RS512` with a provider. |
+| `GUARDRAIL_JWKS_CACHE_SECONDS` | How long fetched keys are used before they are fetched again; default 300. |
+| `GUARDRAIL_JWKS_MAX_STALE_SECONDS` | How long keys stay trusted past that when the provider cannot be reached; default 3600. |
+
+A token naming a key the gateway has not seen triggers one fetch, which is how
+a rotation is picked up at once; further unknown key ids within ten seconds do
+not, so forged tokens cannot be used to flood the provider. Only RSA keys
+published for signing are used, the discovery document must describe the
+issuer that was asked for, and it may not move key retrieval from HTTPS to
+HTTP.
+
+If the provider is unreachable at startup, or stays unreachable past the
+staleness limit, every request is refused with
+`identity_verification_unavailable` and the gateway reports not ready. A key
+revoked during an outage could otherwise stay trusted indefinitely.
+
+The token must carry `sub`, `tenant`, and `exp`, with `roles` and `clearance`
+as described above; map them in the provider. This has been tested against a
+stand-in provider, not against a running Keycloak.
+
 ## Action broker
 
 A protected application proposes a tool action instead of executing it. A tool
