@@ -13,6 +13,7 @@ from opentelemetry.trace import TracerProvider
 
 from guardrail_gateway.approvals import ApprovalRepository, ApprovalStore
 from guardrail_gateway.audit import AuditSink, AuditTransport
+from guardrail_gateway.classifier import InjectionClassifierInspector
 from guardrail_gateway.config import Settings, get_settings
 from guardrail_gateway.detectors import ContentInspector, DeterministicInspector
 from guardrail_gateway.identity import (
@@ -138,15 +139,19 @@ def create_app(
         transport=audit_transport,
         mandatory=runtime_settings.audit_mandatory,
     )
-    if inspectors is None and runtime_settings.presidio_url is not None:
-        inspectors = (
-            DeterministicInspector(),
-            PresidioInspector(
-                runtime_settings.presidio_url,
-                runtime_settings.presidio_timeout_seconds,
-                runtime_settings.presidio_score_threshold,
-            ),
-        )
+    if inspectors is None:
+        configured: list[ContentInspector] = [DeterministicInspector()]
+        if runtime_settings.presidio_url is not None:
+            configured.append(
+                PresidioInspector(
+                    runtime_settings.presidio_url,
+                    runtime_settings.presidio_timeout_seconds,
+                    runtime_settings.presidio_score_threshold,
+                )
+            )
+        if runtime_settings.injection_classifier_url is not None:
+            configured.append(InjectionClassifierInspector.from_settings(runtime_settings))
+        inspectors = tuple(configured)
     service = GatewayService(
         runtime_settings,
         approvals,
@@ -170,7 +175,7 @@ def create_app(
     application = FastAPI(
         lifespan=lifespan,
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.18.0",
+        version="0.19.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service

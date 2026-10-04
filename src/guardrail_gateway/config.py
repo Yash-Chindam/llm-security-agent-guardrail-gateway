@@ -106,6 +106,15 @@ class Settings(BaseSettings):
     presidio_url: str | None = Field(default=None, pattern=r"^https?://")
     presidio_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     presidio_score_threshold: float = Field(default=0.5, ge=0, le=1)
+    # A prompt-injection classifier inside the trusted boundary, used when
+    # set: the /predict URL of a Hugging Face Text Embeddings Inference
+    # server. The
+    # labels are the ones its model uses for an injection; a score at or
+    # above the threshold for any of them becomes evidence.
+    injection_classifier_url: str | None = Field(default=None, pattern=r"^https?://")
+    injection_classifier_labels: tuple[str, ...] = ("INJECTION", "JAILBREAK")
+    injection_classifier_threshold: float = Field(default=0.9, gt=0, le=1)
+    injection_classifier_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
 
     # Section 11. Hosts an agent may fetch from, as a JSON list; empty permits
     # no outbound request. File tools are confined to one directory tree.

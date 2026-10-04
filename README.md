@@ -170,6 +170,36 @@ second detector, and what it recognizes is redacted in place by span. It must
 run inside the trusted boundary: content is sent to it for inspection. If it
 does not return a usable answer the content is denied, not passed.
 
+### Prompt-injection classifier
+
+The built-in detectors match phrasings someone thought of in advance. A
+learned classifier also catches paraphrases of them. Set
+`GUARDRAIL_INJECTION_CLASSIFIER_URL` to the `/predict` URL of a
+[Text Embeddings Inference](https://github.com/huggingface/text-embeddings-inference)
+server running a prompt-injection model inside your trusted boundary.
+
+| Setting | Effect |
+|---|---|
+| `GUARDRAIL_INJECTION_CLASSIFIER_LABELS` | The labels the model uses for an injection; default `["INJECTION", "JAILBREAK"]`. |
+| `GUARDRAIL_INJECTION_CLASSIFIER_THRESHOLD` | A score at or above this for any of those labels becomes evidence; default 0.9. |
+| `GUARDRAIL_INJECTION_CLASSIFIER_TIMEOUT_SECONDS` | Default 2. |
+
+The classifier only supplies evidence. A high score is `prompt_injection`
+evidence that policy weighs like a pattern match; a low score is not evidence
+of safety and cannot clear what another detector found. Long content is sent
+in overlapping windows, so an injection past the model's first few hundred
+tokens is still read. No readable answer means the content was not inspected,
+and it is denied with `content_inspection_unavailable`.
+
+It is off by default, and it has a cost. Measured with
+`protectai/deberta-v3-base-prompt-injection-v2` added to the adversarial
+suite: all 54 attacks were still blocked, and 19 of 20 benign scenarios were
+allowed. The one it blocked, with a score of 0.996, was
+"Why does https://example.com/search?q=refund%20policy%202026 return 404?".
+No threshold separates that from a real injection, so measure false positives
+on your own traffic before enabling it. The suite's committed baseline does
+not include a classifier, and CI does not run one.
+
 ## Retrieved context
 
 `POST /v1/inspect/context/batch` takes every document a retrieval step wants to
