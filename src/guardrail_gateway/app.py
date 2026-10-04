@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response
+from opentelemetry.trace import TracerProvider
 
 from guardrail_gateway.approvals import ApprovalStore
 from guardrail_gateway.audit import AuditSink, AuditTransport
@@ -19,6 +20,7 @@ from guardrail_gateway.identity import (
     Principal,
     Role,
 )
+from guardrail_gateway.kafka import KafkaTransport, producer_factory
 from guardrail_gateway.metrics import CONTENT_TYPE
 from guardrail_gateway.models import (
     ActionInspectionRequest,
@@ -42,6 +44,7 @@ from guardrail_gateway.policy import PolicyEngine
 from guardrail_gateway.presidio import PresidioInspector
 from guardrail_gateway.sensitive import PseudonymVault
 from guardrail_gateway.service import GatewayService
+from guardrail_gateway.tracing import build_provider
 
 
 def get_gateway_service(request: Request) -> GatewayService:
@@ -89,11 +92,18 @@ def create_app(
     inspectors: tuple[ContentInspector, ...] | None = None,
     audit_transport: AuditTransport | None = None,
     vault: PseudonymVault | None = None,
+    tracer_provider: TracerProvider | None = None,
 ) -> FastAPI:
     """Build the gateway; the keyword adapters replace the in-process defaults."""
 
     runtime_settings = settings or get_settings()
     approvals = ApprovalStore(runtime_settings.approval_ttl_seconds)
+    if audit_transport is None and runtime_settings.kafka_bootstrap_servers is not None:
+        audit_transport = KafkaTransport(
+            producer_factory(runtime_settings), runtime_settings.kafka_topic
+        )
+    if tracer_provider is None:
+        tracer_provider = build_provider(runtime_settings)
     audit = AuditSink(
         runtime_settings.audit_buffer_size,
         transport=audit_transport,
@@ -108,12 +118,20 @@ def create_app(
                 runtime_settings.presidio_score_threshold,
             ),
         )
-    service = GatewayService(runtime_settings, approvals, audit, policy, inspectors, vault=vault)
+    service = GatewayService(
+        runtime_settings,
+        approvals,
+        audit,
+        policy,
+        inspectors,
+        vault=vault,
+        tracer_provider=tracer_provider,
+    )
     verifier = IdentityVerifier(runtime_settings)
 
     application = FastAPI(
         title="LLM Security and Agent Guardrail Gateway",
-        version="0.10.0",
+        version="0.11.0",
         description="Deterministic security enforcement for LLM and agent boundaries.",
     )
     application.state.gateway_service = service
@@ -363,7 +381,11 @@ def create_app(
     @application.get("/metrics", tags=["health"], include_in_schema=False)
     def metrics() -> Response:
         body = service.metrics.render(
-            approvals.counts, audit.pending, audit.dropped, service.incidents.open_count()
+            approvals.counts,
+            audit.pending,
+            audit.dropped,
+            service.incidents.open_count(),
+            audit.in_flight,
         )
         return Response(content=body, media_type=CONTENT_TYPE)
 

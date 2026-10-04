@@ -63,6 +63,18 @@ class GatewayMetrics:
             "Audit events lost because the outage buffer was full.",
             registry=self.registry,
         )
+        self._audit_in_flight = Gauge(
+            "guardrail_audit_events_in_flight",
+            "Audit events sent to the transport and not yet acknowledged.",
+            registry=self.registry,
+        )
+        self._detector_latency = Histogram(
+            "guardrail_detector_latency_seconds",
+            "Time one detector took to inspect content.",
+            ["detector"],
+            buckets=_LATENCY_BUCKETS,
+            registry=self.registry,
+        )
         self._incidents = Gauge(
             "guardrail_incidents_open",
             "Incident cases that have not been resolved or closed.",
@@ -74,6 +86,9 @@ class GatewayMetrics:
         self._decisions.labels(point, decision.verdict.value, decision.reason_code).inc()
         self._latency.labels(point).observe(decision.latency_ms / 1_000)
 
+    def observe_detector(self, detector: str, seconds: float) -> None:
+        self._detector_latency.labels(detector).observe(seconds)
+
     def observe_rejection(self, reason_code: str) -> None:
         self._rejections.labels(reason_code).inc()
 
@@ -83,6 +98,7 @@ class GatewayMetrics:
         audit_pending: int,
         audit_dropped: int,
         incidents_open: int,
+        audit_in_flight: int = 0,
     ) -> bytes:
         """Refresh the values read from other components, then serialize."""
 
@@ -90,5 +106,6 @@ class GatewayMetrics:
             self._approvals.labels(status.value).set(count)
         self._audit_pending.set(audit_pending)
         self._audit_dropped.set(audit_dropped)
+        self._audit_in_flight.set(audit_in_flight)
         self._incidents.set(incidents_open)
         return generate_latest(self.registry)

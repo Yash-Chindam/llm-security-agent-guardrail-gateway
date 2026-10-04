@@ -12,6 +12,9 @@ from guardrail_gateway.models import DetectorEvidence, EnforcementPoint, Securit
 
 pytestmark = pytest.mark.unit
 
+# Added to every event on publication.
+_ENVELOPE = ("event_id", "schema_version", "occurred_at")
+
 
 class FlakyTransport:
     """A transport whose availability the test controls."""
@@ -169,11 +172,11 @@ def test_a_credential_rejection_is_recorded_without_the_credential() -> None:
 
     sink.publish_rejection("credentials_invalid", "/v1/inspect/input")
 
-    assert transport.snapshot() == [
-        {
-            "enforcement_point": "credential",
-            "verdict": "deny",
-            "reason_code": "credentials_invalid",
-            "path": "/v1/inspect/input",
-        }
-    ]
+    [event] = transport.snapshot()
+    assert {key: event.pop(key) is not None for key in _ENVELOPE} == dict.fromkeys(_ENVELOPE, True)
+    assert event == {
+        "enforcement_point": "credential",
+        "verdict": "deny",
+        "reason_code": "credentials_invalid",
+        "path": "/v1/inspect/input",
+    }
