@@ -1,0 +1,7 @@
+apiVersion: v2
+name: guardrail-gateway
+description: Policy-aware security gateway for LLM and agent workflows, with an OPA sidecar.
+type: application
+version: 0.17.0
+appVersion: "0.17.0"
+kubeVersion: ">=1.27.0-0"

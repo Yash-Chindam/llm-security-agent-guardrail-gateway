@@ -1,0 +1,78 @@
+{
+  "approval_effects": [
+    "destructive",
+    "external",
+    "write"
+  ],
+  "tools": {
+    "delete_record": {
+      "effects": [
+        "destructive"
+      ],
+      "roles": [
+        "operator"
+      ]
+    },
+    "execute_sql": {
+      "effects": [
+        "read"
+      ],
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    "fetch_url": {
+      "effects": [
+        "external"
+      ],
+      "roles": [
+        "operator"
+      ]
+    },
+    "read_file": {
+      "effects": [
+        "read"
+      ],
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    "run_code": {
+      "effects": [
+        "external",
+        "none"
+      ],
+      "roles": [
+        "operator"
+      ]
+    },
+    "search_documents": {
+      "effects": [
+        "none",
+        "read"
+      ],
+      "roles": [
+        "caller",
+        "operator"
+      ]
+    },
+    "send_email": {
+      "effects": [
+        "external"
+      ],
+      "roles": [
+        "operator"
+      ]
+    },
+    "update_record": {
+      "effects": [
+        "write"
+      ],
+      "roles": [
+        "operator"
+      ]
+    }
+  }
+}

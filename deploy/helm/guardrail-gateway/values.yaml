@@ -1,0 +1,89 @@
+# Each replica is one pod with two containers: the gateway, and an OPA sidecar
+# that holds the policy bundle and listens on loopback only.
+
+replicaCount: 2
+
+image:
+  repository: ""
+  # Deploy by digest (sha256:...), so the image that was scanned and signed is
+  # the image that runs. A tag can be moved; a digest cannot.
+  digest: ""
+  # Only honoured when no digest is given and allowTag is true.
+  tag: ""
+  allowTag: false
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+opa:
+  # false uses the gateway's built-in policy and runs no sidecar.
+  enabled: true
+  image: openpolicyagent/opa:1.9.0-static
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
+
+# A Secret you create and manage, for example through an external secret
+# manager. The chart never creates one, so no credential passes through Helm
+# values or release history. Every key in it becomes an environment variable:
+#   GUARDRAIL_JWT_SECRET, GUARDRAIL_DATABASE_URL, GUARDRAIL_CANARY_SECRETS, ...
+existingSecret: ""
+
+# Non-secret settings, as GUARDRAIL_* environment variables.
+config:
+  GUARDRAIL_AUDIT_MANDATORY: "true"
+  # GUARDRAIL_OIDC_ISSUER: https://idp.example.com/realms/acme
+  # GUARDRAIL_JWT_ALGORITHM: RS256
+  # GUARDRAIL_JWT_AUDIENCE: guardrail-gateway
+  # GUARDRAIL_KAFKA_BOOTSTRAP_SERVERS: kafka.events.svc:9092
+  # GUARDRAIL_OTLP_ENDPOINT: http://tempo.observability.svc:4318/v1/traces
+
+service:
+  type: ClusterIP
+  port: 8000
+
+resources:
+  requests: {cpu: 100m, memory: 128Mi}
+  limits: {memory: 512Mi}
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+serviceAccount:
+  # A dedicated account with no API token mounted: the gateway never calls the
+  # Kubernetes API.
+  create: true
+  name: ""
+  annotations: {}
+
+networkPolicy:
+  enabled: true
+  # Who may call the gateway. Empty means nobody: add your edge proxy and your
+  # applications. Each entry is a NetworkPolicy peer.
+  ingressFrom: []
+  # - namespaceSelector:
+  #     matchLabels: {kubernetes.io/metadata.name: edge}
+  #   podSelector:
+  #     matchLabels: {app.kubernetes.io/name: envoy}
+  # Who may scrape /metrics.
+  metricsFrom: []
+  # - namespaceSelector:
+  #     matchLabels: {kubernetes.io/metadata.name: monitoring}
+  # What the gateway may reach besides DNS. Empty means nothing: add Kafka,
+  # PostgreSQL, the identity provider, and the trace collector as you use them.
+  egressTo: []
+  # - to:
+  #     - namespaceSelector:
+  #         matchLabels: {kubernetes.io/metadata.name: events}
+  #   ports:
+  #     - {protocol: TCP, port: 9092}
+  dns:
+    namespace: kube-system
+    podLabels: {k8s-app: kube-dns}
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []

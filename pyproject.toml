@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "guardrail-gateway"
-version = "0.16.0"
+version = "0.17.0"
 description = "Policy-aware security gateway for LLM and agent workflows"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,6 +39,7 @@ dev = [
   "pip-audit>=2.9,<3.0",
   "psycopg[binary]>=3.2,<4.0",
   "pytest>=9.0.3,<10.0",
+  "pyyaml>=6.0,<7.0",
   "pytest-cov>=6.2,<8.0",
   "ruff>=0.12,<1.0",
   "types-jsonschema>=4.23,<5.0",
