@@ -119,6 +119,40 @@ jobs:
       - run: docker pull "$GUARDRAIL_TEST_SANDBOX_IMAGE"
       - run: pytest tests/integration/test_sandbox_isolation.py --no-cov
 
+  # The whole topology on real services: the gateway with OPA, PostgreSQL,
+  # Kafka, ClickHouse, Prometheus, and Grafana. The smoke test drives the
+  # gateway and follows each decision through every one of them.
+  compose:
+    name: compose
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_FILE: deploy/compose/docker-compose.yml
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -e .
+      - name: Generate credentials for this run
+        run: |
+          python - >> "$GITHUB_ENV" <<'PY'
+          import secrets
+          for name in (
+              "GUARDRAIL_JWT_SECRET",
+              "POSTGRES_PASSWORD",
+              "CLICKHOUSE_PASSWORD",
+              "GRAFANA_ADMIN_PASSWORD",
+          ):
+              print(f"{name}={secrets.token_urlsafe(36)}")
+          PY
+      - run: docker compose up --build --wait --wait-timeout 300
+      - run: python deploy/compose/smoke_test.py
+      - if: ${{ failure() }}
+        run: docker compose logs --tail 80
+      - if: ${{ always() }}
+        run: docker compose down --volumes
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest
@@ -200,7 +234,7 @@ jobs:
 
   release-bundle:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [unit, integration, postgres, opa, sandbox, coverage, e2e, security, container]
+    needs: [unit, integration, postgres, opa, sandbox, compose, coverage, e2e, security, container]
     uses: ./.github/workflows/release-bundle.yml
     with:
       ref: ${{ github.sha }}
