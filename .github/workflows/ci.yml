@@ -138,13 +138,12 @@ jobs:
         run: |
           python - >> "$GITHUB_ENV" <<'PY'
           import secrets
-          for name in (
-              "GUARDRAIL_JWT_SECRET",
-              "POSTGRES_PASSWORD",
-              "CLICKHOUSE_PASSWORD",
-              "GRAFANA_ADMIN_PASSWORD",
-          ):
+          names = ("GUARDRAIL_JWT_SECRET", "CLICKHOUSE_PASSWORD", "GF_SECURITY_ADMIN_PASSWORD")
+          for name in names:
               print(f"{name}={secrets.token_urlsafe(36)}")
+          database = secrets.token_urlsafe(36)
+          print(f"POSTGRES_PASSWORD={database}")
+          print("GUARDRAIL_DATABASE_URL=" + "postgresql://gateway:" + database + "@postgres:5432/gateway")
           PY
       - run: docker compose up --build --wait --wait-timeout 300
       - run: python deploy/compose/smoke_test.py

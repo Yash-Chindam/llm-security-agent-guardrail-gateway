@@ -464,7 +464,8 @@ alert rules, and Grafana with the dashboard.
 cp deploy/compose/.env.example deploy/compose/.env
 ```
 
-Set every value in `.env`, then:
+Set every value in `.env`. No credential is written in the compose file, and a
+preflight step stops the stack from starting while any is missing. Then:
 
 ```bash
 docker compose -f deploy/compose/docker-compose.yml up --build --wait
