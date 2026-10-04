@@ -28,13 +28,13 @@ covered by tests, and a partial row names what is missing.
 | §8.4 before a tool action | done | Allowlist, role authorization, side-effect class, tenant/resource, argument schema, SQL/filesystem/URL policy, approval, and a per-trace execution budget. Quota and budget counters are per process, so a limit is enforced per replica; a shared counter store is not implemented. |
 | §7 technology selection | partial | FastAPI, OPA, Presidio, Kafka, ClickHouse, PostgreSQL, and Trivy are in use. The adversarial suite is the project's own, not PyRIT. NeMo Guardrails, Guardrails AI, Falco, and a Kong or Envoy edge are not implemented. |
 | §9 policy model | done | Every decision carries point, identity, tenant, policy version, verdict, reason code, evidence, digest, and latency. The decision point is the built-in policy or an OPA server with a Rego bundle that CI proves equivalent. |
-| §10 content inspection | partial | Deterministic detectors with redacted evidence; normalization of base64, hex, percent-encoding, ROT13, letter-spacing, and Unicode tricks; per-tenant allow/redact/pseudonymize/deny rules; a separate pseudonym vault; canary secrets; a fail-closed Presidio adapter. A learned injection classifier and NeMo/Guardrails AI rails are not implemented. |
+| §10 content inspection | done | Deterministic detectors with redacted evidence; normalization of base64, hex, percent-encoding, ROT13, letter-spacing, and Unicode tricks; per-tenant allow/redact/pseudonymize/deny rules; a separate pseudonym vault; canary secrets; an optional learned prompt-injection classifier behind a model server, verified by hand against a real model (which blocked every attack and one of twenty benign scenarios); and a Presidio adapter exercised against a real analyzer in CI. NeMo Guardrails and Guardrails AI rails are not implemented. |
 | §11 action broker and sandbox | done | Allowlist, strict per-tool Pydantic schemas, parsed SQL restricted to read-only queries, canonical paths and URLs, tenant checks, digest-bound approval, and an ephemeral container sandbox for code with no network, no host filesystem, and CPU, memory, process, output, and time limits, tested against real containers in CI. The sandbox uses an ordinary container runtime unless a stronger OCI runtime is configured. |
 | §12 red-team design | done | 74 scenarios across every required category plus a benign compatibility set, scored against a committed baseline. |
 | §13 information model | done | SecurityDecision, DetectorEvidence, ActionRequest, ApprovalRecord, RedTeamRun, and IncidentCase exist. Approvals and incidents can be kept in PostgreSQL or SQLite; the decision log is in memory. |
 | §14 events and analytics | done | Structured, redacted decision events delivered through a transport port with ordered, bounded buffering, and a tenant-scoped decision log for auditors. A Kafka transport and a ClickHouse schema, both exercised against real services by the compose job in CI, a Grafana dashboard, and Prometheus alert rules, each checked against what the gateway emits. Approvals and incidents are stored in PostgreSQL, with exactly-once approval use enforced by the database and tested against a real PostgreSQL in CI. Configuration is not stored in PostgreSQL: it comes from the environment. |
 | §15 fail-safe behaviour | done | Policy engine, detectors, and audit transport sit behind ports with a fixed outcome when each is lost: fail closed for side effects, optional restricted read-only mode, bounded audit buffering, and blocking when mandatory audit durability is lost. |
-| §16 platform security | partial | Verified bearer identity with OIDC discovery and key rotation (tested against a stand-in provider, not a running Keycloak), non-root image, no build tooling in runtime, Trivy, SBOM, provenance. A Helm chart with a default-deny NetworkPolicy, read-only non-root containers, a ServiceAccount with no API token, credentials only from an externally managed Secret, and deployment by digest; the release archive is signed with cosign. NetworkPolicy enforcement is not tested, and Falco is not implemented. |
+| §16 platform security | partial | Verified bearer identity with OIDC discovery and key rotation (tested against a stand-in provider, not a running Keycloak), non-root image, no build tooling in runtime, Trivy, SBOM, provenance. A Helm chart with a default-deny NetworkPolicy, read-only non-root containers, a ServiceAccount with no API token, credentials only from an externally managed Secret, and deployment by digest; the release archive is signed with cosign, and a downloaded archive has been verified. NetworkPolicy enforcement is not tested, and Falco is not implemented. |
 | §17 observability | done | The red-team suite reports attack-success, false-positive, and leakage rates. `/metrics` exposes decisions, policy and detector latency, approvals, audit lag and drops, and open incidents, with a dashboard and alert rules. Each decision is an OpenTelemetry span with a child span per detector. |
 | §18 deployment topology | partial | A compose topology with an Envoy edge, the gateway, OPA, Presidio, PostgreSQL, Kafka, ClickHouse, Tempo, Prometheus, and Grafana, exercised end to end in CI. A Helm chart with an OPA sidecar, installed on a kind cluster in CI. The edge does not terminate TLS. Isolated PyRIT workers and Loki are not included. |
 
@@ -110,14 +110,16 @@ Delivered:
   Presidio analyzer, and Tempo in the compose topology, each checked by the
   smoke test.
 
+- **M11 injection classifier** (`v0.19.0`) — an optional learned
+  prompt-injection classifier as one more evidence source.
+
 ## Not implemented
 
 Every milestone above is delivered. What the specification names and this
 repository still does not do:
 
-- **§10** A learned prompt-injection classifier, and NeMo Guardrails or
-  Guardrails AI rails. Detection is deterministic, plus Presidio when
-  configured.
+- **§10** NeMo Guardrails and Guardrails AI rails, which the specification
+  lists as optional.
 - **§7, §12** PyRIT. The adversarial suite is this project's own runner and
   scenarios, not PyRIT targets and scorers, and there are no isolated PyRIT
   workers.
@@ -131,6 +133,8 @@ Implemented but not verified against the real thing:
 - OIDC against a running Keycloak (tested with a stand-in provider).
 - NetworkPolicy enforcement (depends on the cluster's network plugin).
 - The sandbox under a stronger OCI runtime such as gVisor.
+- The prompt-injection classifier in CI: it was run by hand against one
+  model, and its false-positive rate on real traffic is unknown.
 
 Known limits of what is implemented:
 
